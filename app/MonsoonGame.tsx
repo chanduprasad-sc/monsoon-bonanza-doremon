@@ -565,20 +565,21 @@ export default function MonsoonGame() {
 
   return (
     <main className={`campaign-shell screen-${screen} ${screen === "playing" ? "is-playing" : ""}`}>
-      <header className="brand-bar"><span className="brand-mark">☔</span><span>DOREMON JUMP</span><span className="rain-status">● LIVE</span></header>
+      <header className="brand-bar"><span className="brand-mark">☔</span><span>MONSOON BONANZA</span><span className="rain-status">● LIVE</span></header>
 
       {screen === "intro" && <section className="intro-panel">
         <div className="campaign-date">☔ 1 JUL — 31 AUG 2026</div>
         <p className="audience-line">Relationship Managers <span>Internal Contest</span></p>
-        <h1>CLIMB. COLLECT.<br/><span>CONQUER.</span></h1>
-        <p className="intro-copy">Jump through surprise worlds, collect basket goodies and score Runs.</p>
+        <h1 className="campaign-title"><span>MONSOON</span> BONANZA</h1>
+        <div className="game-title-lockup"><img src="/doraemon-sprite.png" alt="" /><div><span>THE GAME</span><strong>DOREMON JUMP</strong></div></div>
+        <p className="intro-copy">Collect as many basket goodies as you can, score more Runs and build your reward points.</p>
         <button className="play-button hero-play" onClick={() => { playSfx("click"); setFormError(""); setScreen("details"); }}>PLAY NOW <span aria-hidden="true">▶</span></button>
         <div className="install-app"><button type="button" disabled={isInstalled} onClick={installApp}>{isInstalled ? "✓ APP INSTALLED" : "＋ INSTALL APP"}</button>{installNote && <p role="status">{installNote}</p>}</div>
 
         <div className="quick-rules" aria-label="How to play">
           <span>↔ <b>Tilt to move</b></span>
-          <span>◆ <b>Collect goodies</b></span>
-          <span>🚀 <b>Use boosts</b></span>
+          <span>🧺 <b>Collect baskets</b></span>
+          <span>🚀 <b>Boost higher</b></span>
         </div>
 
         <div className="intro-details">

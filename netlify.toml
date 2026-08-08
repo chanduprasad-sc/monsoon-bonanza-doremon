@@ -1,0 +1,20 @@
+[build]
+  command = "npm run build:static"
+  publish = "deploy"
+
+[build.environment]
+  NODE_VERSION = "22"
+  VITE_LEAD_FORM_ENDPOINT = "/"
+
+[dev]
+  command = "npm run dev"
+  targetPort = 3000
+  port = 8888
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "SAMEORIGIN"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Permissions-Policy = "accelerometer=(self), gyroscope=(self)"

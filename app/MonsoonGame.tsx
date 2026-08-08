@@ -115,7 +115,7 @@ export default function MonsoonGame() {
     player: { x: 180, y: 500, vx: 0, vy: -10, w: 34, h: 44 },
     platforms: [] as Platform[], input: 0, pointerX: null as number | null,
     score: 0, runs: 0, distance: 0, basketCursor: 0, lastTime: 0, width: 390, height: 700,
-    collectionCounts: Array(BASKETS.length).fill(0) as number[], rocketUntil: 0, worldIndex: 0, worldStage: 0, nextWorldChangeAt: 0, nearbyBasket: -1, isFalling: false, fallStarted: 0,
+    collectionCounts: Array(BASKETS.length).fill(0) as number[], rocketUntil: 0, worldIndex: 0, worldStage: 0, nextWorldChangeAt: 0, nearbyBasket: -1, isFalling: false, fallStarted: 0, resultSubmitted: false,
     villains: [] as Villain[], fireballs: [] as Fireball[], nextVillainAt: 0, villainCursor: 0, villainsDefeated: 0,
   });
   const [screen, setScreen] = useState<Screen>("intro");
@@ -136,6 +136,7 @@ export default function MonsoonGame() {
   const [villainsDefeated, setVillainsDefeated] = useState(0);
   const [formError, setFormError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [resultStatus, setResultStatus] = useState<"idle" | "sending" | "sent" | "local" | "error">("idle");
 
   useEffect(() => {
     setBest(Number(localStorage.getItem("monsoon-bonanza-best") || 0));
@@ -200,9 +201,9 @@ export default function MonsoonGame() {
     game.platforms = makePlatforms(width, height);
     game.input = 0; game.pointerX = null; game.score = 0; game.runs = 0; game.distance = 0; game.basketCursor = 4; game.lastTime = 0;
     const firstWorld = Math.floor(Math.random() * WORLDS.length);
-    game.collectionCounts = Array(BASKETS.length).fill(0); game.rocketUntil = 0; game.worldIndex = firstWorld; game.worldStage = 0; game.nextWorldChangeAt = 0; game.nearbyBasket = 1; game.isFalling = false; game.fallStarted = 0;
+    game.collectionCounts = Array(BASKETS.length).fill(0); game.rocketUntil = 0; game.worldIndex = firstWorld; game.worldStage = 0; game.nextWorldChangeAt = 0; game.nearbyBasket = 1; game.isFalling = false; game.fallStarted = 0; game.resultSubmitted = false;
     game.villains = []; game.fireballs = []; game.nextVillainAt = 0; game.villainCursor = 0; game.villainsDefeated = 0;
-    setScore(0); setRuns(0); setToast(null); setCollectionCounts(Array(BASKETS.length).fill(0)); setWorldIndex(firstWorld); setWorldToast(false); setNearbyBasket(1); setFalling(false); setVillainsDefeated(0);
+    setScore(0); setRuns(0); setToast(null); setCollectionCounts(Array(BASKETS.length).fill(0)); setWorldIndex(firstWorld); setWorldToast(false); setNearbyBasket(1); setFalling(false); setVillainsDefeated(0); setResultStatus("idle");
   }, [makePlatforms]);
 
   const enableMotion = useCallback(async () => {
@@ -222,21 +223,30 @@ export default function MonsoonGame() {
     } catch { setControl("Touch / keys active"); }
   }, []);
 
-  const submitLead = async () => {
-    const lead = { name: name.trim(), mobile, branch: branch.trim(), campaign: "Doremon Jump", createdAt: new Date().toISOString() };
-    localStorage.setItem("monsoon-bonanza-player", JSON.stringify(lead));
+  const submitResult = useCallback(async (finalScore: number, finalRuns: number, counts: number[], defeated: number, finalWorld: number) => {
+    const goodies = counts.reduce((sum, count) => sum + count, 0);
+    const result = {
+      name: name.trim(), mobile, branch: branch.trim(), campaign: "Doremon Jump",
+      score: String(finalScore), runs: String(finalRuns), rewardPoints: String(rewardPoints(finalRuns)),
+      goodiesCollected: String(goodies), villainsDefeated: String(defeated), worldReached: WORLDS[finalWorld].name,
+      basketBreakdown: JSON.stringify(BASKETS.flatMap((basket, index) => counts[index] > 0 ? [{ basket: basket.name, count: counts[index], runs: basket.runs * counts[index] }] : [])),
+      completedAt: new Date().toISOString(),
+    };
+    localStorage.setItem("doremon-jump-last-result", JSON.stringify(result)); setResultStatus("sending");
     const viteEndpoint = (import.meta as ImportMeta & { env?: Record<string, string> }).env?.VITE_LEAD_FORM_ENDPOINT;
     const endpoint = viteEndpoint ?? (typeof process !== "undefined" ? process.env.NEXT_PUBLIC_LEAD_FORM_ENDPOINT : undefined);
-    if (!endpoint) return;
+    if (!endpoint) { setResultStatus("local"); return; }
     const isNetlify = endpoint === "/";
-    await fetch(endpoint, {
+    const response = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": isNetlify ? "application/x-www-form-urlencoded" : "application/json" },
       body: isNetlify
-        ? new URLSearchParams({ "form-name": "doremon-jump-leads", ...lead }).toString()
-        : JSON.stringify(lead),
+        ? new URLSearchParams({ "form-name": "doremon-jump-leads", ...result }).toString()
+        : JSON.stringify(result),
     });
-  };
+    if (!response.ok) throw new Error(`Score submission failed with ${response.status}`);
+    setResultStatus("sent");
+  }, [name, mobile, branch]);
 
   const startGame = async (event: FormEvent) => {
     event.preventDefault();
@@ -244,7 +254,7 @@ export default function MonsoonGame() {
     if (!/^[6-9]\d{9}$/.test(mobile)) { setFormError("Enter a valid 10-digit Indian mobile number."); return; }
     if (!branch.trim()) { setFormError("Please enter your branch."); return; }
     setSubmitting(true); setFormError("");
-    try { await submitLead(); } catch { /* The local copy still allows play when the optional endpoint is unavailable. */ }
+    localStorage.setItem("monsoon-bonanza-player", JSON.stringify({ name: name.trim(), mobile, branch: branch.trim(), campaign: "Doremon Jump" }));
     await enableMotion();
     playSfx("start"); resetGame(); setScreen("playing"); setSubmitting(false);
   };
@@ -488,13 +498,17 @@ export default function MonsoonGame() {
 
       if (game.isFalling && time - game.fallStarted > 1650) {
         const finalScore = Math.floor(game.score); setScore(finalScore); setRuns(game.runs);
+        if (!game.resultSubmitted) {
+          game.resultSubmitted = true;
+          void submitResult(finalScore, game.runs, [...game.collectionCounts], game.villainsDefeated, game.worldIndex).catch(() => setResultStatus("error"));
+        }
         const nextBest = Math.max(best, finalScore); setBest(nextBest); localStorage.setItem("monsoon-bonanza-best", String(nextBest)); setFalling(false); setScreen("gameover"); return;
       }
       frameRef.current = requestAnimationFrame(draw);
     };
     frameRef.current = requestAnimationFrame(draw);
     return () => { observer.disconnect(); window.removeEventListener("keydown", keyDown); window.removeEventListener("keyup", keyUp); if (frameRef.current) cancelAnimationFrame(frameRef.current); };
-  }, [screen, best, playSfx]);
+  }, [screen, best, playSfx, submitResult]);
 
   const pointerMove = (event: ReactPointerEvent<HTMLCanvasElement>) => {
     const rect = event.currentTarget.getBoundingClientRect(); gameRef.current.pointerX = event.clientX - rect.left;
@@ -582,6 +596,7 @@ export default function MonsoonGame() {
         <div className="storm-medal">☔</div><p>THE CLOUDS CAUGHT UP</p><h1>Great run,<br/><span>{name.split(" ")[0]}!</span></h1>
         <div className="final-stats"><div><span>Score</span><strong>{score.toLocaleString("en-IN")}</strong></div><div><span>Runs scored</span><strong>{runs}</strong></div><div><span>Reward points</span><strong>{rewardPoints(runs).toLocaleString("en-IN")}</strong></div><div><span>Goodies</span><strong>{totalGoodies}</strong></div></div>
         <p className="gameover-copy">{runs >= 900 ? "You cleared every slab. Each additional 50 Runs now unlocks another 5,000 points." : nextSlab ? `${nextSlab.runs - runs} more Runs to reach the next reward slab.` : "Keep climbing to unlock more campaign rewards."}</p>
+        <p className={`result-status is-${resultStatus}`} role="status">{resultStatus === "sending" ? "Saving your score…" : resultStatus === "sent" ? "✓ Score recorded successfully" : resultStatus === "local" ? "Score saved on this device (form endpoint not connected)." : resultStatus === "error" ? "Score saved on this device; online submission could not be completed." : ""}</p>
         <button className="play-button" onClick={() => { playSfx("click"); resetGame(); setScreen("playing"); }}>PLAY AGAIN  ↻</button>
         <section className="run-ledger" aria-label="Collected basket summary">
           <div className="ledger-heading"><div><span>RUN SUMMARY</span><strong>{WORLDS[worldIndex].icon} {WORLDS[worldIndex].name} reached</strong></div><b>{totalGoodies} collected</b></div>

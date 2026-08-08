@@ -16,7 +16,7 @@ npm run dev
 The game always stores the latest player on their own device so it works in demo mode. To send leads elsewhere, copy `.env.example` to `.env.local` and set `NEXT_PUBLIC_LEAD_FORM_ENDPOINT`.
 
 - **Netlify Forms:** use `/`. The form is already named `doremon-jump-leads`.
-- **Formspree / webhook / CRM:** paste the HTTPS endpoint. The game sends JSON with `name`, `mobile`, `branch`, `campaign`, and `createdAt`.
+- **Formspree / webhook / CRM:** paste the HTTPS endpoint. When a run ends, the game sends one result containing `name`, `mobile`, `branch`, `score`, `runs`, `rewardPoints`, `goodiesCollected`, `villainsDefeated`, `worldReached`, `basketBreakdown`, and `completedAt`.
 - **Google Sheets:** deploy a Google Apps Script web app that accepts POST requests, then use that URL.
 
 For production, validate and rate-limit submissions at the destination endpoint. Add the approved privacy notice and retention policy before public launch.

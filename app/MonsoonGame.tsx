@@ -9,6 +9,7 @@ type Platform = { x: number; y: number; w: number; h: number; basket: number | n
 type Villain = { id: number; x: number; y: number; baseY: number; w: number; h: number; vx: number; phase: number; alive: boolean };
 type Fireball = { x: number; y: number; vx: number; vy: number; targetId: number; life: number };
 type SoundKind = "click" | "collect" | "jump" | "spring" | "rocket" | "break" | "level" | "start" | "fall" | "shoot";
+type InstallPromptEvent = Event & { prompt: () => Promise<void>; userChoice: Promise<{ outcome: "accepted" | "dismissed" }> };
 
 const SOUND_FILES: Partial<Record<SoundKind, string>> = {
   start: "/audio/game-start.mp3",
@@ -137,6 +138,9 @@ export default function MonsoonGame() {
   const [formError, setFormError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [resultStatus, setResultStatus] = useState<"idle" | "sending" | "sent" | "local" | "error">("idle");
+  const [installPrompt, setInstallPrompt] = useState<InstallPromptEvent | null>(null);
+  const [installNote, setInstallNote] = useState("");
+  const [isInstalled, setIsInstalled] = useState(false);
 
   useEffect(() => {
     setBest(Number(localStorage.getItem("monsoon-bonanza-best") || 0));
@@ -145,7 +149,28 @@ export default function MonsoonGame() {
     for (const [kind, source] of Object.entries(SOUND_FILES) as [SoundKind, string][]) {
       const clip = new Audio(source); clip.preload = "auto"; clipRefs.current[kind] = clip;
     }
+    if ("serviceWorker" in navigator) void navigator.serviceWorker.register("/sw.js");
+    const standalone = window.matchMedia("(display-mode: standalone)").matches || Boolean((navigator as Navigator & { standalone?: boolean }).standalone);
+    setIsInstalled(standalone);
+    const captureInstall = (event: Event) => { event.preventDefault(); setInstallPrompt(event as InstallPromptEvent); };
+    const markInstalled = () => { setIsInstalled(true); setInstallPrompt(null); setInstallNote("Installed — open Doremon Jump from your home screen."); };
+    window.addEventListener("beforeinstallprompt", captureInstall);
+    window.addEventListener("appinstalled", markInstalled);
+    return () => { window.removeEventListener("beforeinstallprompt", captureInstall); window.removeEventListener("appinstalled", markInstalled); };
   }, []);
+
+  const installApp = async () => {
+    if (isInstalled) return;
+    if (installPrompt) {
+      await installPrompt.prompt();
+      const choice = await installPrompt.userChoice;
+      if (choice.outcome === "accepted") setInstallNote("Installing Doremon Jump…");
+      else setInstallNote("Installation cancelled. You can try again anytime.");
+      setInstallPrompt(null); return;
+    }
+    const isiPhone = /iPad|iPhone|iPod/.test(navigator.userAgent);
+    setInstallNote(isiPhone ? "On iPhone: open in Safari, tap Share, then Add to Home Screen." : "Open your browser menu and choose Install app or Add to Home screen.");
+  };
 
   const playSfx = useCallback((kind: SoundKind) => {
     if (mutedRef.current || typeof window === "undefined") return;
@@ -541,6 +566,7 @@ export default function MonsoonGame() {
         <h1>CLIMB. COLLECT.<br/><span>CONQUER.</span></h1>
         <p className="intro-copy">Guide Doremon through surprise worlds, collect eligible basket goodies and turn every jump into Runs. Every 10,000 score points unlocks a new destination.</p>
         <button className="play-button hero-play" onClick={() => { playSfx("click"); setFormError(""); setScreen("details"); }}>PLAY NOW <span aria-hidden="true">▶</span></button>
+        <div className="install-app"><button type="button" disabled={isInstalled} onClick={installApp}>{isInstalled ? "✓ APP INSTALLED" : "＋ INSTALL WEB APP"}</button>{installNote && <p role="status">{installNote}</p>}</div>
 
         <div className="how-to">
           <div><strong>↔</strong><span>Tilt, drag or use arrow keys</span></div>

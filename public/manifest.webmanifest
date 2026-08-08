@@ -1,0 +1,19 @@
+{
+  "name": "Doremon Jump",
+  "short_name": "Doremon Jump",
+  "description": "Jump, collect eligible basket goodies, and climb the Runs reward track.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#07111f",
+  "theme_color": "#07111f",
+  "icons": [
+    {
+      "src": "/doraemon-sprite.png",
+      "sizes": "256x256",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

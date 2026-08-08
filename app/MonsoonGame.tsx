@@ -141,6 +141,7 @@ export default function MonsoonGame() {
   const [installPrompt, setInstallPrompt] = useState<InstallPromptEvent | null>(null);
   const [installNote, setInstallNote] = useState("");
   const [isInstalled, setIsInstalled] = useState(false);
+  const [showTiltGuide, setShowTiltGuide] = useState(false);
 
   useEffect(() => {
     setBest(Number(localStorage.getItem("monsoon-bonanza-best") || 0));
@@ -228,7 +229,7 @@ export default function MonsoonGame() {
     const firstWorld = Math.floor(Math.random() * WORLDS.length);
     game.collectionCounts = Array(BASKETS.length).fill(0); game.rocketUntil = 0; game.worldIndex = firstWorld; game.worldStage = 0; game.nextWorldChangeAt = 0; game.nearbyBasket = 1; game.isFalling = false; game.fallStarted = 0; game.resultSubmitted = false;
     game.villains = []; game.fireballs = []; game.nextVillainAt = 0; game.villainCursor = 0; game.villainsDefeated = 0;
-    setScore(0); setRuns(0); setToast(null); setCollectionCounts(Array(BASKETS.length).fill(0)); setWorldIndex(firstWorld); setWorldToast(false); setNearbyBasket(1); setFalling(false); setVillainsDefeated(0); setResultStatus("idle");
+    setScore(0); setRuns(0); setToast(null); setCollectionCounts(Array(BASKETS.length).fill(0)); setWorldIndex(firstWorld); setWorldToast(false); setNearbyBasket(1); setFalling(false); setVillainsDefeated(0); setResultStatus("idle"); setShowTiltGuide(true);
   }, [makePlatforms]);
 
   const enableMotion = useCallback(async () => {
@@ -242,6 +243,7 @@ export default function MonsoonGame() {
         if (event.gamma == null) return;
         gameRef.current.input = clamp(event.gamma / 24, -1, 1);
         setControl("Tilt active");
+        if (Math.abs(event.gamma) > 2) setShowTiltGuide(false);
       };
       window.addEventListener("deviceorientation", handler, { passive: true });
       window.setTimeout(() => setControl((current) => current === "Tilt active" ? current : "Touch / keys active"), 1200);
@@ -285,6 +287,12 @@ export default function MonsoonGame() {
   };
 
   useEffect(() => {
+    if (screen !== "playing" || !showTiltGuide) return;
+    const timer = window.setTimeout(() => setShowTiltGuide(false), 4500);
+    return () => window.clearTimeout(timer);
+  }, [screen, showTiltGuide]);
+
+  useEffect(() => {
     if (screen !== "playing") return;
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -317,8 +325,8 @@ export default function MonsoonGame() {
     const observer = new ResizeObserver(resize); observer.observe(canvas);
 
     const keyDown = (event: KeyboardEvent) => {
-      if (["ArrowLeft", "a", "A"].includes(event.key)) gameRef.current.input = -1;
-      if (["ArrowRight", "d", "D"].includes(event.key)) gameRef.current.input = 1;
+      if (["ArrowLeft", "a", "A"].includes(event.key)) { gameRef.current.input = -1; setShowTiltGuide(false); }
+      if (["ArrowRight", "d", "D"].includes(event.key)) { gameRef.current.input = 1; setShowTiltGuide(false); }
     };
     const keyUp = (event: KeyboardEvent) => {
       if (["ArrowLeft", "ArrowRight", "a", "A", "d", "D"].includes(event.key)) gameRef.current.input = 0;
@@ -562,26 +570,31 @@ export default function MonsoonGame() {
       {screen === "intro" && <section className="intro-panel">
         <div className="campaign-date">☔ 1 JUL — 31 AUG 2026</div>
         <p className="audience-line">Relationship Managers <span>Internal Contest</span></p>
-        <p className="launch-copy">THE REWARD RUN IS LIVE</p>
         <h1>CLIMB. COLLECT.<br/><span>CONQUER.</span></h1>
-        <p className="intro-copy">Guide Doremon through surprise worlds, collect eligible basket goodies and turn every jump into Runs. Every 10,000 score points unlocks a new destination.</p>
+        <p className="intro-copy">Jump through surprise worlds, collect basket goodies and score Runs.</p>
         <button className="play-button hero-play" onClick={() => { playSfx("click"); setFormError(""); setScreen("details"); }}>PLAY NOW <span aria-hidden="true">▶</span></button>
-        <div className="install-app"><button type="button" disabled={isInstalled} onClick={installApp}>{isInstalled ? "✓ APP INSTALLED" : "＋ INSTALL WEB APP"}</button>{installNote && <p role="status">{installNote}</p>}</div>
+        <div className="install-app"><button type="button" disabled={isInstalled} onClick={installApp}>{isInstalled ? "✓ APP INSTALLED" : "＋ INSTALL APP"}</button>{installNote && <p role="status">{installNote}</p>}</div>
 
-        <div className="how-to">
-          <div><strong>↔</strong><span>Tilt, drag or use arrow keys</span></div>
-          <div><strong>◆</strong><span>Collect basket goodies</span></div>
-          <div><strong>🚀</strong><span>Hit springs and rocket boosts</span></div>
-          <div><strong>🔥</strong><span>Tap villains after 30,000 points</span></div>
+        <div className="quick-rules" aria-label="How to play">
+          <span>↔ <b>Tilt to move</b></span>
+          <span>◆ <b>Collect goodies</b></span>
+          <span>🚀 <b>Use boosts</b></span>
         </div>
 
-        <section className="reward-track" aria-label="Reward slabs">
-          <h2>YOUR RUNS REWARD TRACK</h2>
-          {SLABS.map((slab, index) => <div className="reward-row" key={slab.runs}><span>Slab {index + 1} · {slab.runs} Runs</span><strong>{slab.points.toLocaleString("en-IN")} points</strong></div>)}
-          <p>After 900 Runs: +5,000 points for every extra 50 Runs.</p>
-        </section>
+        <div className="intro-details">
+          <details className="reward-track">
+            <summary><span>REWARD TRACK</span><strong>500 Runs → 50,000 points</strong><b aria-hidden="true">＋</b></summary>
+            <div className="reward-rows">
+              {SLABS.map((slab, index) => <div className="reward-row" key={slab.runs}><span>Slab {index + 1} · {slab.runs} Runs</span><strong>{slab.points.toLocaleString("en-IN")} points</strong></div>)}
+              <p>After 900 Runs: +5,000 points for every extra 50 Runs.</p>
+            </div>
+          </details>
 
-        <section className="basket-list" aria-label="Eligible basket goodies"><div className="basket-heading"><span>ALL {BASKETS.length} ELIGIBLE BASKETS</span><strong>BASKET DETAILS · RUNS</strong></div><div>{BASKETS.map((basket) => <article key={basket.name}><i>{basket.icon}</i><p><strong>{basket.name}</strong><span>Fee {basket.fee}</span></p><b>+{basket.runs}<small> Runs</small></b></article>)}</div></section>
+          <details className="basket-list">
+            <summary><span>ELIGIBLE BASKETS</span><strong>{BASKETS.length} goodies · Up to +200 Runs</strong><b aria-hidden="true">＋</b></summary>
+            <div>{BASKETS.map((basket) => <article key={basket.name}><i>{basket.icon}</i><p><strong>{basket.name}</strong><span>Fee {basket.fee}</span></p><b>+{basket.runs}<small> Runs</small></b></article>)}</div>
+          </details>
+        </div>
       </section>}
 
       {screen === "details" && <section className="details-panel">
@@ -614,7 +627,8 @@ export default function MonsoonGame() {
           <div className="nearby-goodie"><span>NEXT GOODIE</span><strong>{BASKETS[nearbyBasket].name}</strong><b>+{BASKETS[nearbyBasket].runs} Runs</b></div>
           {score >= SCORE_GATES.villains && <div className="shoot-tip">🔥 TAP A VILLAIN TO SHOOT <b>{villainsDefeated} defeated</b></div>}
         </>}
-        <canvas ref={canvasRef} tabIndex={0} aria-label="Jumping game. Tilt your phone, drag, or use arrow keys to move. After 30,000 points, tap flying villains to shoot." onPointerDown={(event) => { if (shootAtVillain(event)) return; event.currentTarget.setPointerCapture(event.pointerId); pointerMove(event); }} onPointerMove={(event) => { if (event.buttons) pointerMove(event); }} onPointerUp={() => { gameRef.current.pointerX = null; gameRef.current.input = 0; }} />
+        {showTiltGuide && !falling && <div className="tilt-guide" role="status"><span className="tilt-phone" aria-hidden="true">📱</span><div><strong>TILT TO MOVE DOREMON</strong><p>Move your phone left or right</p></div></div>}
+        <canvas ref={canvasRef} tabIndex={0} aria-label="Jumping game. Tilt your phone, drag, or use arrow keys to move. After 30,000 points, tap flying villains to shoot." onPointerDown={(event) => { setShowTiltGuide(false); if (shootAtVillain(event)) return; event.currentTarget.setPointerCapture(event.pointerId); pointerMove(event); }} onPointerMove={(event) => { if (event.buttons) pointerMove(event); }} onPointerUp={() => { gameRef.current.pointerX = null; gameRef.current.input = 0; }} />
         {toast && <div className="basket-toast" role="status"><i>{toast.icon}</i><div className="toast-copy"><span>GOODIE COLLECTED</span><strong>{toast.name}</strong><b>+{toast.runs} Runs</b><dl><div><dt>SUBSCRIPTION FEE</dt><dd>{toast.fee} / year</dd></div></dl></div></div>}
       </section>}
 

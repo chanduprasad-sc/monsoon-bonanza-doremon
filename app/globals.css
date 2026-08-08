@@ -58,11 +58,11 @@ h1 span { color: var(--gold); }
 .play-button:disabled { cursor: wait; opacity: .7; transform: none; }
 .hero-play { width: min(100%, 360px); margin: 0 auto 6px; }
 .hero-play span { margin-left: 8px; }
-.install-app { width: min(100%, 360px); margin: 10px auto 0; }
-.install-app button { min-height: 42px; padding: 0 18px; border: 1px solid oklch(0.78 0.15 175 / .58); border-radius: 12px; background: oklch(0.13 0.04 255); color: var(--teal); font-size: .72rem; font-weight: 900; letter-spacing: .05em; transition: transform 180ms cubic-bezier(.2,.8,.2,1), background 180ms ease; }
-.install-app button:hover { background: oklch(0.19 0.055 250); transform: translateY(-1px); }
+.install-app { width: min(100%, 360px); margin: 14px auto 0; }
+.install-app button { width: 100%; min-height: 50px; padding: 0 20px; border: 1px solid oklch(0.9 0.17 90 / .85); border-radius: 14px; background: linear-gradient(135deg, oklch(0.92 0.17 96), oklch(0.78 0.17 76)); color: var(--deep); box-shadow: 0 0 0 4px oklch(0.85 0.17 88 / .12), 0 12px 32px oklch(0.78 0.16 80 / .28); font-size: .8rem; font-weight: 950; letter-spacing: .08em; animation: install-pulse 2.2s ease-in-out infinite; transition: transform 180ms cubic-bezier(.2,.8,.2,1), filter 180ms ease; }
+.install-app button:hover { filter: brightness(1.08); transform: translateY(-2px); }
 .install-app button:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
-.install-app button:disabled { cursor: default; color: var(--cloud); opacity: .72; transform: none; }
+.install-app button:disabled { cursor: default; color: var(--deep); opacity: .64; animation: none; transform: none; }
 .install-app p { margin: 9px auto 0; color: var(--muted); font-size: .7rem; line-height: 1.45; text-wrap: pretty; }
 .privacy-note { margin: 12px 2px 0; color: var(--muted); font-size: .7rem; line-height: 1.45; text-align: center; }
 .form-error { margin: -3px 0 12px; color: oklch(0.82 0.14 25); font-size: .78rem; font-weight: 700; }
@@ -96,6 +96,10 @@ h1 span { color: var(--gold); }
 .campaign-shell.is-playing .brand-bar { display: none; }
 .game-wrap { width: min(100%, 520px); height: 100svh; margin: auto; position: relative; background: var(--midnight); overflow: hidden; box-shadow: 0 0 80px oklch(0.02 0 0 / .8); touch-action: none; }
 .game-wrap canvas { display: block; width: 100%; height: 100%; outline: none; touch-action: none; }
+.tilt-guide { position: absolute; z-index: 7; top: 43%; left: 50%; width: min(calc(100% - 36px), 390px); padding: 16px 18px; display: flex; align-items: center; justify-content: center; gap: 14px; border: 1px solid oklch(0.9 0.15 90 / .7); border-radius: 18px; background: oklch(0.12 0.045 255 / .95); color: white; box-shadow: 0 18px 48px oklch(0.02 0 0 / .5), 0 0 0 4px oklch(0.84 0.16 88 / .1); pointer-events: none; transform: translate(-50%, -50%); animation: tilt-guide-in 240ms cubic-bezier(.2,.8,.2,1); }
+.tilt-phone { flex: 0 0 auto; font-size: 2.4rem; line-height: 1; transform-origin: center bottom; animation: tilt-phone 900ms ease-in-out infinite alternate; }
+.tilt-guide strong { display: block; color: var(--gold); font-size: .82rem; letter-spacing: .07em; }
+.tilt-guide p { margin: 5px 0 0; color: var(--cloud); font-size: .74rem; line-height: 1.3; }
 .hud { position: absolute; z-index: 4; top: max(10px, env(safe-area-inset-top)); left: 10px; right: 10px; display: grid; grid-template-columns: .8fr 1.6fr .9fr; gap: 6px; pointer-events: none; }
 .hud > div { min-height: 62px; padding: 9px 8px; border: 1px solid oklch(0.65 0.06 245 / .36); border-radius: 14px; background: oklch(0.13 0.035 255 / .9); box-shadow: 0 6px 20px oklch(0.03 0 0 / .25); }
 .hud span { display: block; color: var(--muted); font-size: .55rem; font-weight: 900; letter-spacing: .05em; }
@@ -210,6 +214,9 @@ footer { padding: 22px 16px calc(22px + env(safe-area-inset-bottom)); border-top
 @keyframes world-in { from { opacity: 0; transform: translate(-50%, -44%) scale(.92); } }
 @keyframes level-chip { 0% { transform: translateX(-16px); opacity: .45; } 28% { transform: translateX(0) scale(1.08); opacity: 1; } 100% { transform: scale(1); } }
 @keyframes shoot-ready { from { opacity: 0; transform: translate(-50%, -10px) scale(.96); } to { opacity: 1; transform: translateX(-50%) scale(1); } }
+@keyframes install-pulse { 50% { box-shadow: 0 0 0 7px oklch(0.85 0.17 88 / .18), 0 16px 38px oklch(0.78 0.16 80 / .4); } }
+@keyframes tilt-guide-in { from { opacity: 0; transform: translate(-50%, -44%) scale(.94); } }
+@keyframes tilt-phone { from { transform: rotate(-18deg); } to { transform: rotate(18deg); } }
 @media (max-width: 420px) {
   .intro-panel { width: min(100% - 22px, 680px); padding-top: 28px; }
   .lead-form { padding: 17px; }

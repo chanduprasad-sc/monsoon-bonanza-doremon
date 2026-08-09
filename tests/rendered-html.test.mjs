@@ -42,6 +42,12 @@ test("includes progression, mission, gadget and result systems", async () => {
   assert.match(game, /doremon-jump-achievements/);
   assert.match(game, /const doremonColors/);
   assert.match(game, /lastHudUpdate/);
+  assert.match(game, /multiplier === 5 \? 0 : multiplier/);
+  assert.match(game, /platform\.magnetX/);
+  assert.match(game, /GADGET_VISUALS/);
+  assert.match(game, /game\.worldStage = targetWorldStage/);
+  assert.match(game, /if \(colorPhase === 0\)/);
+  assert.doesNotMatch(game, /nextWorldChangeAt/);
   assert.doesNotMatch(game, /shieldCharges|powerUp === "shield"/);
   assert.match(game, /Tilt calibrated/);
   assert.match(styles, /\.mission-panel/);

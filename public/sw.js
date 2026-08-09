@@ -1,4 +1,4 @@
-const CACHE_NAME = "doremon-jump-v1";
+const CACHE_NAME = "doremon-jump-v2";
 const APP_SHELL = [
   "/",
   "/manifest.webmanifest",

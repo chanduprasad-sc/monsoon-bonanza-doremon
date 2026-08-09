@@ -5,7 +5,7 @@ import { FormEvent, PointerEvent as ReactPointerEvent, useCallback, useEffect, u
 type Screen = "intro" | "details" | "playing" | "gameover";
 type Basket = { name: string; fee: string; runs: number; short: string; icon: string };
 type PowerUp = "boots" | "drone" | "magnet" | "slow" | "cloud" | "door" | null;
-type Platform = { x: number; y: number; w: number; h: number; basket: number | null; collected: boolean; drift: number; kind: "normal" | "breakable"; broken: boolean; powerUp: PowerUp; powerUsed: boolean; rescueCloud?: boolean };
+type Platform = { x: number; y: number; w: number; h: number; basket: number | null; collected: boolean; drift: number; kind: "normal" | "breakable"; broken: boolean; powerUp: PowerUp; powerUsed: boolean; rescueCloud?: boolean; magnetX?: number; magnetY?: number };
 type Villain = { id: number; x: number; y: number; baseY: number; w: number; h: number; vx: number; phase: number; alive: boolean; boss: boolean; health: number; maxHealth: number };
 type Fireball = { x: number; y: number; vx: number; vy: number; targetId: number; life: number };
 type FallingBoots = { x: number; y: number; vy: number; spin: number; life: number };
@@ -51,7 +51,12 @@ const ACHIEVEMENTS = [
   { id: "every-basket", icon: "◆", label: "Every Basket Collected" },
 ] as const;
 
-const GADGET_ICONS: Partial<Record<Exclude<PowerUp, null>, string>> = { magnet: "🧲", slow: "🔔", cloud: "☁️", door: "🚪" };
+const GADGET_VISUALS: Partial<Record<Exclude<PowerUp, null>, { symbol: string; label: string; fill: string; stroke: string }>> = {
+  magnet: { symbol: "∪", label: "MAGNET", fill: "#e63946", stroke: "#ffd166" },
+  slow: { symbol: "◷", label: "SLOW", fill: "#6d28d9", stroke: "#c4b5fd" },
+  cloud: { symbol: "☁", label: "RESCUE", fill: "#087f8c", stroke: "#67e8f9" },
+  door: { symbol: "▣", label: "PORTAL", fill: "#d946ef", stroke: "#f5d0fe" },
+};
 
 const BASKETS: Basket[] = [
   { name: "HNI Prime–Growth at a Fair Price Asset Allocation", fee: "₹1,00,000", runs: 200, short: "HNI", icon: "◆" },
@@ -144,6 +149,7 @@ export default function MonsoonGame() {
   const mutedRef = useRef(false);
   const orientationHandlerRef = useRef<((event: DeviceOrientationEvent) => void) | null>(null);
   const celebrationTimerRef = useRef<number | null>(null);
+  const basketToastTimerRef = useRef<number | null>(null);
   const gameRef = useRef({
     player: { x: 180, y: 500, vx: 0, vy: -10, w: 34, h: 44 },
     platforms: [] as Platform[], input: 0, pointerX: null as number | null,
@@ -209,7 +215,7 @@ export default function MonsoonGame() {
     const markInstalled = () => { setIsInstalled(true); setInstallPrompt(null); setInstallNote("Installed — open Doremon Jump from your home screen."); };
     window.addEventListener("beforeinstallprompt", captureInstall);
     window.addEventListener("appinstalled", markInstalled);
-    return () => { window.clearTimeout(hydrateTimer); window.removeEventListener("beforeinstallprompt", captureInstall); window.removeEventListener("appinstalled", markInstalled); if (orientationHandlerRef.current) window.removeEventListener("deviceorientation", orientationHandlerRef.current); if (celebrationTimerRef.current) window.clearTimeout(celebrationTimerRef.current); };
+    return () => { window.clearTimeout(hydrateTimer); window.removeEventListener("beforeinstallprompt", captureInstall); window.removeEventListener("appinstalled", markInstalled); if (orientationHandlerRef.current) window.removeEventListener("deviceorientation", orientationHandlerRef.current); if (celebrationTimerRef.current) window.clearTimeout(celebrationTimerRef.current); if (basketToastTimerRef.current) window.clearTimeout(basketToastTimerRef.current); };
   }, []);
 
   const installApp = async () => {
@@ -401,7 +407,7 @@ export default function MonsoonGame() {
       if (game.width > 0 && Math.abs(game.width - rect.width) > 1) {
         const xScale = rect.width / game.width;
         game.player.x *= xScale;
-        for (const platform of game.platforms) { platform.x *= xScale; platform.w *= xScale; }
+        for (const platform of game.platforms) { platform.x *= xScale; platform.w *= xScale; if (platform.magnetX != null) platform.magnetX *= xScale; }
         for (const villain of game.villains) { villain.x *= xScale; villain.w *= xScale; }
         for (const fireball of game.fireballs) fireball.x *= xScale;
         for (const boots of game.fallingBoots) boots.x *= xScale;
@@ -409,7 +415,7 @@ export default function MonsoonGame() {
       if (game.height > 0 && Math.abs(game.height - rect.height) > 1) {
         const yScale = rect.height / game.height;
         game.player.y *= yScale;
-        for (const platform of game.platforms) platform.y *= yScale;
+        for (const platform of game.platforms) { platform.y *= yScale; if (platform.magnetY != null) platform.magnetY *= yScale; }
         for (const villain of game.villains) { villain.y *= yScale; villain.baseY *= yScale; villain.h *= yScale; }
         for (const fireball of game.fireballs) fireball.y *= yScale;
         for (const boots of game.fallingBoots) boots.y *= yScale;
@@ -497,12 +503,11 @@ export default function MonsoonGame() {
       const collectBasket = (platform: Platform) => {
         if (platform.basket == null || platform.collected) return;
         platform.collected = true;
-        const basket = BASKETS[platform.basket]; game.combo = Math.min(5, game.combo + 1); game.bestCombo = Math.max(game.bestCombo, game.combo); const awardedRuns = basket.runs * game.combo; game.runs += awardedRuns; game.score += awardedRuns * 10;
+        const basket = BASKETS[platform.basket]; const multiplier = game.combo + 1; game.bestCombo = Math.max(game.bestCombo, multiplier); const awardedRuns = basket.runs * multiplier; game.runs += awardedRuns; game.score += awardedRuns * 10; game.combo = multiplier === 5 ? 0 : multiplier;
         game.collectionCounts[platform.basket] += 1;
         game.nextWorldChangeAt = Math.max(game.nextWorldChangeAt, time + 1900);
-        setScore(game.score); setRuns(game.runs); setCombo(game.combo); setBestCombo(game.bestCombo); setCollectionCounts([...game.collectionCounts]); setToast({ basket, awarded: awardedRuns, multiplier: game.combo }); playSfx("collect"); window.setTimeout(() => setToast(null), 2200);
+        setScore(game.score); setRuns(game.runs); setCombo(game.combo); setBestCombo(game.bestCombo); setCollectionCounts([...game.collectionCounts]); setToast({ basket, awarded: awardedRuns, multiplier }); playSfx("collect"); if (basketToastTimerRef.current) window.clearTimeout(basketToastTimerRef.current); basketToastTimerRef.current = window.setTimeout(() => setToast(null), 1800);
         updateMission("baskets"); updateMission("combo", game.bestCombo, true); updateMission("score", game.score, true);
-        if ([2, 3, 5].includes(game.combo)) celebrate(`${game.combo}× BASKET COMBO!`);
         const collectedTotal = game.collectionCounts.reduce((sum, count) => sum + count, 0); if (collectedTotal >= 25) unlockAchievement("basket-25"); if (game.collectionCounts.every((count) => count > 0)) unlockAchievement("every-basket");
       };
 
@@ -512,8 +517,16 @@ export default function MonsoonGame() {
         if (platform.basket != null && !platform.collected) {
           const labelX = clamp(platform.x + platform.w / 2 - 54, 5, width - 113);
           const touchesGoodie = player.x + player.w > labelX && player.x < labelX + 108 && player.y + player.h > platform.y - 57 && player.y < platform.y - 7;
-          const magnetCollect = time < game.magnetUntil && Math.hypot(player.x + player.w / 2 - (platform.x + platform.w / 2), player.y + player.h / 2 - (platform.y - 28)) < 145;
-          if (touchesGoodie || magnetCollect) collectBasket(platform);
+          const magnetActive = time < game.magnetUntil && platform.y > -70 && platform.y < height + 45;
+          if (magnetActive) {
+            platform.magnetX ??= platform.x + platform.w / 2; platform.magnetY ??= platform.y - 28;
+            const targetX = player.x + player.w / 2, targetY = player.y + player.h / 2; const dx = targetX - platform.magnetX, dy = targetY - platform.magnetY; const pull = Math.min(.3, .105 * dt + .055);
+            platform.magnetX += dx * pull; platform.magnetY += dy * pull;
+            if (Math.hypot(dx, dy) < 17) collectBasket(platform);
+          } else {
+            platform.magnetX = undefined; platform.magnetY = undefined;
+            if (touchesGoodie) collectBasket(platform);
+          }
         }
         if (platform.broken) { platform.y += 5.4 * dt; continue; }
         const newBottom = player.y + player.h;
@@ -552,7 +565,7 @@ export default function MonsoonGame() {
 
       if (!game.isFalling && player.y < height * 0.4 && player.vy < 0) {
         const shift = height * 0.4 - player.y; player.y = height * 0.4; game.distance += shift;
-        for (const platform of game.platforms) platform.y += shift;
+        for (const platform of game.platforms) { platform.y += shift; if (platform.magnetY != null) platform.magnetY += shift; }
         for (const boots of game.fallingBoots) boots.y += shift;
         game.score = Math.max(game.score, Math.floor(game.distance * 2));
         if (time - game.lastHudUpdate >= 80) { game.lastHudUpdate = time; setScore(game.score); }
@@ -640,26 +653,33 @@ export default function MonsoonGame() {
         if (platform.powerUp === "boots" && !platform.powerUsed) {
           const cx = platform.x + platform.w / 2; context.save(); context.translate(cx, platform.y - 3);
           for (const side of [-1, 1]) {
-            const bx = side * 11; context.strokeStyle = "#dffcff"; context.lineWidth = 2; context.beginPath(); context.moveTo(bx - 4, 0); context.lineTo(bx + 4, -5); context.lineTo(bx - 4, -10); context.lineTo(bx + 4, -15); context.stroke();
-            context.fillStyle = "#0cd8ba"; context.beginPath(); context.roundRect(bx - 8, -25, 16, 11, 4); context.fill(); context.fillStyle = "#05243c"; context.beginPath(); context.roundRect(bx - 7, -18, 18, 5, 2); context.fill();
+            const bx = side * 11; context.strokeStyle = "#ffd166"; context.lineWidth = 2.4; context.beginPath(); context.moveTo(bx - 4, 0); context.lineTo(bx + 4, -5); context.lineTo(bx - 4, -10); context.lineTo(bx + 4, -15); context.stroke();
+            context.fillStyle = "#db2777"; context.strokeStyle = "#fbcfe8"; context.lineWidth = 1.2; context.beginPath(); context.roundRect(bx - 8, -25, 16, 11, 4); context.fill(); context.stroke(); context.fillStyle = "#351040"; context.beginPath(); context.roundRect(bx - 7, -18, 18, 5, 2); context.fill();
           }
           context.restore();
         }
         if (platform.powerUp === "drone" && !platform.powerUsed) {
-          const cx = platform.x + platform.w / 2; context.save(); context.translate(cx, platform.y - 17); context.strokeStyle = "#b9fff0"; context.lineWidth = 2.2;
-          const rotors = [[-24, -7], [-17, 7], [17, 7], [24, -7]];
-          for (const [rx, ry] of rotors) { context.beginPath(); context.moveTo(rx * .38, ry * .38); context.lineTo(rx, ry); context.stroke(); context.fillStyle = "rgba(223,252,255,.88)"; context.beginPath(); context.ellipse(rx, ry, 10 + Math.sin(time / 55 + rx) * 2, 2.5, 0, 0, Math.PI * 2); context.fill(); }
-          context.fillStyle = "#253d5b"; context.beginPath(); context.roundRect(-14, -8, 28, 16, 6); context.fill(); context.strokeStyle = "#ffe17c"; context.stroke(); context.fillStyle = "#0cd8ba"; context.beginPath(); context.arc(0, 0, 3.5, 0, Math.PI * 2); context.fill(); context.restore();
+          const cx = platform.x + platform.w / 2; context.save(); context.translate(cx, platform.y - 24); context.lineCap = "round";
+          const rotors = [[-25, -10], [-25, 10], [25, -10], [25, 10]];
+          context.strokeStyle = "#334155"; context.lineWidth = 4; for (const [rx, ry] of rotors) { context.beginPath(); context.moveTo(Math.sign(rx) * 9, Math.sign(ry) * 4); context.lineTo(rx, ry); context.stroke(); context.fillStyle = "#0f172a"; context.beginPath(); context.arc(rx, ry, 7, 0, Math.PI * 2); context.fill(); context.strokeStyle = "#22d3ee"; context.lineWidth = 1.5; context.stroke(); context.save(); context.translate(rx, ry); context.rotate(time / 42 * Math.sign(rx * ry)); context.strokeStyle = "#f8fafc"; context.lineWidth = 2.2; context.beginPath(); context.moveTo(-10, 0); context.lineTo(10, 0); context.moveTo(0, -10); context.lineTo(0, 10); context.stroke(); context.restore(); }
+          context.fillStyle = "#1d4ed8"; context.strokeStyle = "#67e8f9"; context.lineWidth = 2; context.beginPath(); context.roundRect(-12, -13, 24, 26, 7); context.fill(); context.stroke(); context.fillStyle = "#fbbf24"; context.beginPath(); context.roundRect(-7, -7, 14, 5, 2); context.fill(); context.fillStyle = "#22c55e"; context.beginPath(); context.arc(0, 6, 3, 0, Math.PI * 2); context.fill(); context.restore();
         }
-        if (platform.powerUp && !platform.powerUsed && GADGET_ICONS[platform.powerUp]) { context.font = "25px system-ui"; context.textAlign = "center"; context.fillText(GADGET_ICONS[platform.powerUp]!, platform.x + platform.w / 2, platform.y - 8); }
+        if (platform.powerUp && !platform.powerUsed && GADGET_VISUALS[platform.powerUp]) { const visual = GADGET_VISUALS[platform.powerUp]!; const cx = platform.x + platform.w / 2; context.save(); context.shadowBlur = 9; context.shadowColor = visual.stroke; context.fillStyle = visual.fill; context.strokeStyle = visual.stroke; context.lineWidth = 2; context.beginPath(); context.roundRect(cx - 19, platform.y - 45, 38, 34, 9); context.fill(); context.stroke(); context.shadowBlur = 0; context.fillStyle = "#fff"; context.font = "900 19px system-ui"; context.textAlign = "center"; context.fillText(visual.symbol, cx, platform.y - 26); context.fillStyle = visual.stroke; context.font = "900 6px system-ui"; context.fillText(visual.label, cx, platform.y - 15); context.restore(); }
         if (platform.basket != null && !platform.collected) {
           const basket = BASKETS[platform.basket]; const cx = platform.x + platform.w / 2;
-          const labelX = clamp(cx - 54, 5, width - 113);
-          context.fillStyle = "rgba(4,18,31,.94)"; context.beginPath(); context.roundRect(labelX, platform.y - 53, 108, 43, 10); context.fill();
-          context.strokeStyle = "#b9fff0"; context.lineWidth = 2; context.stroke();
-          context.fillStyle = "#0cd8ba"; context.font = "900 18px system-ui"; context.textAlign = "left"; context.fillText(basket.icon, labelX + 9, platform.y - 27);
-          context.fillStyle = "#fff"; context.font = "900 10px system-ui"; context.fillText(basket.short, labelX + 32, platform.y - 31);
-          context.fillStyle = "#ffe17c"; context.font = "800 8px system-ui"; context.fillText(`+${basket.runs} RUNS`, labelX + 32, platform.y - 18);
+          if (platform.magnetX != null && platform.magnetY != null) {
+            const orbColors = ["#22d3ee", "#fbbf24", "#f472b6", "#a78bfa"]; const orbColor = orbColors[platform.basket % orbColors.length]; const targetX = player.x + player.w / 2, targetY = player.y + player.h / 2; const dx = targetX - platform.magnetX, dy = targetY - platform.magnetY;
+            context.save(); context.strokeStyle = `${orbColor}88`; context.lineWidth = 1.5; context.setLineDash([3, 7]); context.beginPath(); context.moveTo(platform.magnetX, platform.magnetY); context.quadraticCurveTo(platform.magnetX - dy * .12, platform.magnetY + dx * .12, targetX, targetY); context.stroke(); context.setLineDash([]);
+            for (let trail = 1; trail <= 2; trail += 1) { context.globalAlpha = .42 / trail; context.fillStyle = orbColor; context.beginPath(); context.arc(platform.magnetX - dx * .055 * trail, platform.magnetY - dy * .055 * trail, 5 - trail, 0, Math.PI * 2); context.fill(); }
+            context.globalAlpha = 1; context.shadowBlur = 14; context.shadowColor = orbColor; context.fillStyle = orbColor; context.beginPath(); context.arc(platform.magnetX, platform.magnetY, 10, 0, Math.PI * 2); context.fill(); context.shadowBlur = 0; context.strokeStyle = "#fff"; context.lineWidth = 2; context.stroke(); context.fillStyle = "#07111f"; context.font = "900 11px system-ui"; context.textAlign = "center"; context.textBaseline = "middle"; context.fillText(basket.icon, platform.magnetX, platform.magnetY + .5); context.restore();
+          } else {
+            const labelX = clamp(cx - 54, 5, width - 113);
+            context.fillStyle = "rgba(4,18,31,.94)"; context.beginPath(); context.roundRect(labelX, platform.y - 53, 108, 43, 10); context.fill();
+            context.strokeStyle = "#b9fff0"; context.lineWidth = 2; context.stroke();
+            context.fillStyle = "#0cd8ba"; context.font = "900 18px system-ui"; context.textAlign = "left"; context.fillText(basket.icon, labelX + 9, platform.y - 27);
+            context.fillStyle = "#fff"; context.font = "900 10px system-ui"; context.fillText(basket.short, labelX + 32, platform.y - 31);
+            context.fillStyle = "#ffe17c"; context.font = "800 8px system-ui"; context.fillText(`+${basket.runs} RUNS`, labelX + 32, platform.y - 18);
+          }
         }
       }
 
@@ -698,11 +718,11 @@ export default function MonsoonGame() {
       const doremonColors = ["#169fe3", "#7657e8", "#10bfa5", "#ef476f", "#f2a51a", "#37b45b", "#e456b4", "#465ce8"];
       const outfitColor = outfitColors[game.worldStage % outfitColors.length]; const accessoryMode = game.worldStage % 5;
       const doremonColor = doremonColors[game.worldStage % doremonColors.length];
-      if (time < game.magnetUntil) { context.strokeStyle = "rgba(12,216,186,.5)"; context.lineWidth = 2; context.beginPath(); context.arc(0, 0, 39 + Math.sin(time / 120) * 4, 0, Math.PI * 2); context.stroke(); }
+      if (time < game.magnetUntil) { context.save(); context.strokeStyle = "rgba(255,209,102,.92)"; context.lineWidth = 2.5; context.beginPath(); context.arc(0, 0, 38 + Math.sin(time / 120) * 3, 0, Math.PI * 2); context.stroke(); context.strokeStyle = "rgba(230,57,70,.68)"; context.lineWidth = 1.5; context.beginPath(); context.arc(0, 0, 44 + Math.cos(time / 140) * 3, 0, Math.PI * 2); context.stroke(); for (let i = 0; i < 4; i += 1) { const angle = time / 310 + i * Math.PI / 2; context.fillStyle = i % 2 ? "#ffd166" : "#e63946"; context.beginPath(); context.arc(Math.cos(angle) * 42, Math.sin(angle) * 35, 3, 0, Math.PI * 2); context.fill(); } context.restore(); }
       if (droning) {
-        context.strokeStyle = "#dffcff"; context.lineWidth = 2.4; const rotors = [[-34, -13], [-31, 11], [31, 11], [34, -13]];
-        for (const [rx, ry] of rotors) { context.beginPath(); context.moveTo(Math.sign(rx) * 10, ry * .35); context.lineTo(rx, ry); context.stroke(); context.fillStyle = "rgba(223,252,255,.9)"; context.beginPath(); context.ellipse(rx, ry, 12 + Math.sin(time / 38 + rx) * 2, 3, 0, 0, Math.PI * 2); context.fill(); }
-        context.fillStyle = "#253d5b"; context.beginPath(); context.roundRect(-12, -12, 24, 27, 7); context.fill(); context.strokeStyle = "#ffe17c"; context.stroke();
+        context.save(); context.lineCap = "round"; const rotors = [[-31, -14], [-31, 12], [31, -14], [31, 12]];
+        context.strokeStyle = "#1e3a8a"; context.lineWidth = 5; for (const [rx, ry] of rotors) { context.beginPath(); context.moveTo(Math.sign(rx) * 8, Math.sign(ry) * 5); context.lineTo(rx, ry); context.stroke(); context.fillStyle = "#0f172a"; context.beginPath(); context.arc(rx, ry, 8, 0, Math.PI * 2); context.fill(); context.strokeStyle = "#22d3ee"; context.lineWidth = 1.5; context.stroke(); context.save(); context.translate(rx, ry); context.rotate(time / 30 * Math.sign(rx * ry)); context.strokeStyle = "rgba(255,255,255,.95)"; context.lineWidth = 2.5; context.beginPath(); context.moveTo(-12, 0); context.lineTo(12, 0); context.moveTo(0, -12); context.lineTo(0, 12); context.stroke(); context.restore(); }
+        context.fillStyle = "#1d4ed8"; context.strokeStyle = "#67e8f9"; context.lineWidth = 2; context.beginPath(); context.roundRect(-13, -16, 26, 34, 8); context.fill(); context.stroke(); context.fillStyle = "#fbbf24"; context.beginPath(); context.roundRect(-8, -10, 16, 6, 2); context.fill(); context.fillStyle = "#22c55e"; context.beginPath(); context.arc(-4, 7, 2.5, 0, Math.PI * 2); context.fill(); context.fillStyle = "#ef4444"; context.beginPath(); context.arc(4, 7, 2.5, 0, Math.PI * 2); context.fill(); context.restore();
       }
       const moving = Math.abs(player.vx) > 1.05;
       const sprite = game.isFalling ? (Math.floor(time / 105) % 2 === 0 ? runSpriteRef.current : spriteRef.current) : moving ? runSpriteRef.current : spriteRef.current;
@@ -719,6 +739,7 @@ export default function MonsoonGame() {
         }
       }
       else { context.fillStyle = "#169fe3"; context.beginPath(); context.arc(0, 0, 20, 0, Math.PI * 2); context.fill(); }
+      if (droning) { context.strokeStyle = "#67e8f9"; context.lineWidth = 2; context.beginPath(); context.arc(-10, 2, 7, -Math.PI / 2, Math.PI / 2); context.moveTo(10, -5); context.arc(10, 2, 7, -Math.PI / 2, Math.PI / 2, true); context.stroke(); context.fillStyle = "#1d4ed8"; context.strokeStyle = "#fbbf24"; context.lineWidth = 1.4; context.beginPath(); context.roundRect(-8, 8, 16, 9, 3); context.fill(); context.stroke(); }
       if (upgradeTier >= 1 && accessoryMode === 1) { context.fillStyle = outfitColor; context.beginPath(); context.roundRect(-16, 4, 32, 8, 4); context.fill(); context.beginPath(); context.moveTo(10, 8); context.lineTo(22, 19); context.lineTo(10, 15); context.closePath(); context.fill(); }
       if (wearingSpringBoots) { for (const side of [-1, 1]) { const bx = side * 11; context.strokeStyle = "#dffcff"; context.lineWidth = 2; context.beginPath(); context.moveTo(bx - 4, 22); context.lineTo(bx + 4, 26); context.lineTo(bx - 4, 30); context.lineTo(bx + 4, 34); context.stroke(); context.fillStyle = "#0cd8ba"; context.beginPath(); context.roundRect(bx - 8, 31, 18, 8, 3); context.fill(); } }
       if (upgradeTier >= 3 && accessoryMode === 3) { context.fillStyle = "#ffe17c"; context.strokeStyle = "#9d6616"; context.lineWidth = 1.4; context.beginPath(); context.moveTo(-13, -29); context.lineTo(-9, -40); context.lineTo(-2, -33); context.lineTo(3, -42); context.lineTo(9, -33); context.lineTo(14, -40); context.lineTo(13, -28); context.closePath(); context.fill(); context.stroke(); }
@@ -833,7 +854,7 @@ export default function MonsoonGame() {
         {celebration && <div className="celebration-toast" role="status">{celebration}</div>}
         {showTiltGuide && !falling && <div className="tilt-guide" role="status"><span className="tilt-phone" aria-hidden="true">📱</span><div><strong>TILT TO MOVE DOREMON</strong><p>Move your phone left or right</p></div></div>}
         <canvas ref={canvasRef} tabIndex={0} aria-label="Jumping game. Tilt your phone, drag, or use arrow keys to move. After 30,000 points, tap flying villains to shoot." onPointerDown={(event) => { setShowTiltGuide(false); if (shootAtVillain(event)) return; event.currentTarget.setPointerCapture(event.pointerId); pointerMove(event); }} onPointerMove={(event) => { if (event.buttons) pointerMove(event); }} onPointerUp={() => { gameRef.current.pointerX = null; gameRef.current.input = 0; }} />
-        {toast && <div className="basket-toast" role="status"><i>{toast.basket.icon}</i><div className="toast-copy"><span>GOODIE COLLECTED · {toast.multiplier}× COMBO</span><strong>{toast.basket.name}</strong><b>+{toast.awarded} Runs</b><dl><div><dt>SUBSCRIPTION FEE</dt><dd>{toast.basket.fee} / year</dd></div></dl></div></div>}
+        {toast && <div className="basket-toast" role="status"><i>{toast.basket.icon}</i><div className="toast-copy"><span>GOODIE COLLECTED{toast.multiplier > 1 ? ` · ${toast.multiplier}× COMBO` : ""}</span><strong>{toast.basket.name}</strong><b>+{toast.awarded} Runs</b><dl><div><dt>SUBSCRIPTION FEE</dt><dd>{toast.basket.fee} / year</dd></div></dl></div></div>}
       </section>}
 
       {screen === "gameover" && <section className="gameover-panel">

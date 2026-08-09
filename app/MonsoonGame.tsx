@@ -4,8 +4,8 @@ import { FormEvent, PointerEvent as ReactPointerEvent, useCallback, useEffect, u
 
 type Screen = "intro" | "details" | "playing" | "gameover";
 type Basket = { name: string; fee: string; runs: number; short: string; icon: string };
-type PowerUp = "boots" | "drone" | "magnet" | "shield" | "slow" | "cloud" | "door" | null;
-type Platform = { x: number; y: number; w: number; h: number; basket: number | null; collected: boolean; drift: number; kind: "normal" | "breakable"; broken: boolean; powerUp: PowerUp; powerUsed: boolean };
+type PowerUp = "boots" | "drone" | "magnet" | "slow" | "cloud" | "door" | null;
+type Platform = { x: number; y: number; w: number; h: number; basket: number | null; collected: boolean; drift: number; kind: "normal" | "breakable"; broken: boolean; powerUp: PowerUp; powerUsed: boolean; rescueCloud?: boolean };
 type Villain = { id: number; x: number; y: number; baseY: number; w: number; h: number; vx: number; phase: number; alive: boolean; boss: boolean; health: number; maxHealth: number };
 type Fireball = { x: number; y: number; vx: number; vy: number; targetId: number; life: number };
 type FallingBoots = { x: number; y: number; vy: number; spin: number; life: number };
@@ -51,7 +51,7 @@ const ACHIEVEMENTS = [
   { id: "every-basket", icon: "◆", label: "Every Basket Collected" },
 ] as const;
 
-const GADGET_ICONS: Partial<Record<Exclude<PowerUp, null>, string>> = { magnet: "🧲", shield: "☂️", slow: "🔔", cloud: "☁️", door: "🚪" };
+const GADGET_ICONS: Partial<Record<Exclude<PowerUp, null>, string>> = { magnet: "🧲", slow: "🔔", cloud: "☁️", door: "🚪" };
 
 const BASKETS: Basket[] = [
   { name: "HNI Prime–Growth at a Fair Price Asset Allocation", fee: "₹1,00,000", runs: 200, short: "HNI", icon: "◆" },
@@ -99,7 +99,7 @@ const WORLDS = [
 ];
 
 function platformExtras(index: number, score = 0) {
-  const gadgetCycle: Exclude<PowerUp, null>[] = ["boots", "drone", "magnet", "shield", "slow", "cloud", "door"];
+  const gadgetCycle: Exclude<PowerUp, null>[] = ["boots", "drone", "magnet", "slow", "cloud", "door"];
   const powerUp: PowerUp = index > 3 && index % 9 === 0 ? gadgetCycle[Math.floor(index / 9) % gadgetCycle.length] : null;
   const breakFrequency = score < SCORE_GATES.breakableBoards ? 0 : score < SCORE_GATES.villains ? 11 : score < 40000 ? 9 : score < SCORE_GATES.fullDifficulty ? 8 : 7;
   return { kind: breakFrequency && index > 4 && index % breakFrequency === 0 ? "breakable" as const : "normal" as const, broken: false, powerUp, powerUsed: false };
@@ -138,7 +138,7 @@ export default function MonsoonGame() {
   const frameRef = useRef<number | null>(null);
   const spriteRef = useRef<HTMLImageElement | null>(null);
   const runSpriteRef = useRef<HTMLImageElement | null>(null);
-  const tintedSpriteCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const tintedSpriteCacheRef = useRef<Map<string, HTMLCanvasElement>>(new Map());
   const audioRef = useRef<AudioContext | null>(null);
   const clipRefs = useRef<Partial<Record<SoundKind, HTMLAudioElement>>>({});
   const mutedRef = useRef(false);
@@ -148,7 +148,7 @@ export default function MonsoonGame() {
     player: { x: 180, y: 500, vx: 0, vy: -10, w: 34, h: 44 },
     platforms: [] as Platform[], input: 0, pointerX: null as number | null,
     score: 0, runs: 0, distance: 0, basketCursor: 0, lastTime: 0, width: 390, height: 700,
-    collectionCounts: Array(BASKETS.length).fill(0) as number[], droneUntil: 0, bootsJumpsRemaining: 0, fallingBoots: [] as FallingBoots[], magnetUntil: 0, slowUntil: 0, shieldCharges: 0, cloudCharges: 0,
+    collectionCounts: Array(BASKETS.length).fill(0) as number[], droneUntil: 0, bootsJumpsRemaining: 0, fallingBoots: [] as FallingBoots[], magnetUntil: 0, slowUntil: 0, cloudCharges: 0, lastHudUpdate: 0, lastMissionScore: -250,
     combo: 0, bestCombo: 0, missions: [] as Mission[], achievements: [] as string[], worldIndex: 0, worldStage: 0, nextWorldChangeAt: 0, nearbyBasket: -1, isFalling: false, fallStarted: 0, resultSubmitted: false,
     villains: [] as Villain[], fireballs: [] as Fireball[], nextVillainAt: 0, nextBossScore: 50000, villainCursor: 0, villainsDefeated: 0,
   });
@@ -249,7 +249,7 @@ export default function MonsoonGame() {
       };
       if (kind === "click") tone(420, 0, .07, "triangle", 520, .035);
       if (kind === "break") { tone(135, 0, .1, "square", 70, .045); tone(90, .06, .14, "triangle", 45, .035); }
-      if (kind === "shoot") { tone(1180, 0, .2, "sawtooth", 230, .11); tone(760, .025, .18, "square", 170, .07); tone(1560, .055, .12, "triangle", 420, .055); }
+      if (kind === "shoot") { tone(1180, 0, .2, "sawtooth", 230, .2); tone(760, .025, .18, "square", 170, .14); tone(1560, .055, .12, "triangle", 420, .1); }
     };
     if (audio.state === "suspended") void audio.resume().then(playToneSequence).catch(() => { /* The next direct tap will retry audio. */ });
     else playToneSequence();
@@ -289,16 +289,16 @@ export default function MonsoonGame() {
     const items: Platform[] = [{ x: width / 2 - 52, y: height - 75, w: 104, h: 13, basket: null, collected: true, drift: 0, ...platformExtras(0) }];
     let y = height - 155;
     let previousX = width / 2 - 50;
-    for (let i = 0; i < 15; i += 1) {
+    for (let i = 0; i < 13; i += 1) {
       const w = 94 + Math.random() * 24;
       const reach = Math.min(108, width * 0.28);
       const x = clamp(previousX + (Math.random() - 0.5) * reach * 2, 12, width - w - 12);
       const extras = platformExtras(i, 0);
       const platform: Platform = { x, y, w, h: 13, basket: i % 3 === 1 && !extras.powerUp ? i % BASKETS.length : null, collected: false, drift: 0, ...extras };
       items.push(platform);
-      if (i % 4 === 0) items.push(sideBoard(platform, width));
+      if (i % 6 === 3) items.push(sideBoard(platform, width));
       previousX = x;
-      y -= 62 + Math.random() * 10;
+      y -= 70 + Math.random() * 8;
     }
     return items;
   }, []);
@@ -314,7 +314,7 @@ export default function MonsoonGame() {
     game.input = 0; game.pointerX = null; game.score = 0; game.runs = 0; game.distance = 0; game.basketCursor = 4; game.lastTime = 0;
     const firstWorld = Math.floor(Math.random() * WORLDS.length);
     const runMissions = createMissions();
-    game.collectionCounts = Array(BASKETS.length).fill(0); game.droneUntil = 0; game.bootsJumpsRemaining = 0; game.fallingBoots = []; game.magnetUntil = 0; game.slowUntil = 0; game.shieldCharges = 0; game.cloudCharges = 0; game.combo = 0; game.bestCombo = 0; game.missions = runMissions; game.worldIndex = firstWorld; game.worldStage = 0; game.nextWorldChangeAt = 0; game.nearbyBasket = 1; game.isFalling = false; game.fallStarted = 0; game.resultSubmitted = false;
+    game.collectionCounts = Array(BASKETS.length).fill(0); game.droneUntil = 0; game.bootsJumpsRemaining = 0; game.fallingBoots = []; game.magnetUntil = 0; game.slowUntil = 0; game.cloudCharges = 0; game.lastHudUpdate = 0; game.lastMissionScore = -250; game.combo = 0; game.bestCombo = 0; game.missions = runMissions; game.worldIndex = firstWorld; game.worldStage = 0; game.nextWorldChangeAt = 0; game.nearbyBasket = 1; game.isFalling = false; game.fallStarted = 0; game.resultSubmitted = false;
     game.villains = []; game.fireballs = []; game.nextVillainAt = 0; game.nextBossScore = 50000; game.villainCursor = 0; game.villainsDefeated = 0;
     setScore(0); setRuns(0); setToast(null); setCollectionCounts(Array(BASKETS.length).fill(0)); setWorldIndex(firstWorld); setWorldToast(false); setNearbyBasket(1); setFalling(false); setVillainsDefeated(0); setResultStatus("idle"); setShowTiltGuide(true); setCombo(0); setBestCombo(0); setMissions(runMissions); setShowMissions(false);
     window.setTimeout(() => setShowMissions(true), 4700);
@@ -394,7 +394,7 @@ export default function MonsoonGame() {
 
     const resize = () => {
       const rect = canvas.getBoundingClientRect();
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
       canvas.width = rect.width * dpr; canvas.height = rect.height * dpr;
       context.setTransform(dpr, 0, 0, dpr, 0, 0);
       const game = gameRef.current;
@@ -428,14 +428,15 @@ export default function MonsoonGame() {
     };
     window.addEventListener("keydown", keyDown); window.addEventListener("keyup", keyUp);
 
+    let cachedWorld = -1; let cachedWorldHeight = 0; let cachedBackground: CanvasGradient | null = null;
+    let cachedPlanetWidth = 0; let cachedPlanet: CanvasGradient | null = null;
     const drawWorld = (world: number, time: number, width: number, height: number) => {
       const gradients = [
         ["#73c9ff", "#2774a8"], ["#111936", "#35295e"], ["#dff5ff", "#7ba6c5"],
         ["#ffbf69", "#d46b38"], ["#0fb8bd", "#07577a"], ["#07051d", "#24134f"], ["#70d6ff", "#087f8c"],
       ];
-      const gradient = context.createLinearGradient(0, 0, 0, height);
-      gradient.addColorStop(0, gradients[world][0]); gradient.addColorStop(1, gradients[world][1]);
-      context.fillStyle = gradient; context.fillRect(0, 0, width, height);
+      if (!cachedBackground || cachedWorld !== world || cachedWorldHeight !== height) { cachedBackground = context.createLinearGradient(0, 0, 0, height); cachedBackground.addColorStop(0, gradients[world][0]); cachedBackground.addColorStop(1, gradients[world][1]); cachedWorld = world; cachedWorldHeight = height; }
+      context.fillStyle = cachedBackground; context.fillRect(0, 0, width, height);
 
       if (world === 0) {
         context.fillStyle = "#ffe37a"; context.beginPath(); context.arc(width - 62, 116, 34, 0, Math.PI * 2); context.fill();
@@ -449,18 +450,18 @@ export default function MonsoonGame() {
         context.fillStyle = "rgba(3,8,24,.56)"; for (let x = 0; x < width; x += 44) context.fillRect(x, height - 45 - (x * 13 % 100), 39, 150);
       } else if (world === 2) {
         context.fillStyle = "rgba(255,255,255,.88)"; context.beginPath(); context.moveTo(0, height); context.lineTo(width * .28, height - 210); context.lineTo(width * .52, height); context.lineTo(width * .73, height - 270); context.lineTo(width, height); context.fill();
-        for (let i = 0; i < 54; i += 1) { const x = (i * 71 + time * .02) % width; const y = (i * 103 + time * .07) % height; context.beginPath(); context.arc(x, y, 1.5 + i % 3, 0, Math.PI * 2); context.fill(); }
+        for (let i = 0; i < 40; i += 1) { const x = (i * 71 + time * .02) % width; const y = (i * 103 + time * .07) % height; context.beginPath(); context.arc(x, y, 1.5 + i % 3, 0, Math.PI * 2); context.fill(); }
       } else if (world === 3) {
         context.fillStyle = "#fff0a8"; context.beginPath(); context.arc(width - 62, 118, 38, 0, Math.PI * 2); context.fill();
         context.fillStyle = "rgba(190,77,37,.5)"; context.beginPath(); context.moveTo(0, height); context.quadraticCurveTo(width * .35, height - 160, width, height - 45); context.lineTo(width, height); context.fill();
         context.strokeStyle = "rgba(35,91,54,.7)"; context.lineWidth = 8; for (let x = 45; x < width; x += 150) { context.beginPath(); context.moveTo(x, height - 50); context.lineTo(x, height - 130); context.moveTo(x, height - 95); context.lineTo(x - 18, height - 113); context.stroke(); }
       } else if (world === 4) {
         context.strokeStyle = "rgba(182,255,246,.28)"; context.lineWidth = 2;
-        for (let i = 0; i < 34; i += 1) { const x = (i * 97 + Math.sin(time / 900 + i) * 12) % width; const y = height - ((i * 83 + time * .035) % height); context.beginPath(); context.arc(x, y, 2 + i % 5, 0, Math.PI * 2); context.stroke(); }
+        for (let i = 0; i < 26; i += 1) { const x = (i * 97 + Math.sin(time / 900 + i) * 12) % width; const y = height - ((i * 83 + time * .035) % height); context.beginPath(); context.arc(x, y, 2 + i % 5, 0, Math.PI * 2); context.stroke(); }
         context.fillStyle = "rgba(0,46,54,.5)"; for (let x = 18; x < width; x += 55) { context.beginPath(); context.moveTo(x, height); context.quadraticCurveTo(x + 22, height - 80, x + 4, height - 155); context.quadraticCurveTo(x - 18, height - 70, x, height); context.fill(); }
       } else if (world === 5) {
-        context.fillStyle = "rgba(255,255,255,.9)"; for (let i = 0; i < 62; i += 1) context.fillRect((i * 67) % width, 80 + ((i * 113) % (height - 110)), i % 7 === 0 ? 2.2 : 1, i % 7 === 0 ? 2.2 : 1);
-        const planet = context.createRadialGradient(width - 80, 142, 5, width - 80, 142, 48); planet.addColorStop(0, "#ffbd79"); planet.addColorStop(1, "#8c4cc8"); context.fillStyle = planet; context.beginPath(); context.arc(width - 80, 142, 46, 0, Math.PI * 2); context.fill();
+        context.fillStyle = "rgba(255,255,255,.9)"; for (let i = 0; i < 46; i += 1) context.fillRect((i * 67) % width, 80 + ((i * 113) % (height - 110)), i % 7 === 0 ? 2.2 : 1, i % 7 === 0 ? 2.2 : 1);
+        if (!cachedPlanet || cachedPlanetWidth !== width) { cachedPlanet = context.createRadialGradient(width - 80, 142, 5, width - 80, 142, 48); cachedPlanet.addColorStop(0, "#ffbd79"); cachedPlanet.addColorStop(1, "#8c4cc8"); cachedPlanetWidth = width; } context.fillStyle = cachedPlanet; context.beginPath(); context.arc(width - 80, 142, 46, 0, Math.PI * 2); context.fill();
         context.strokeStyle = "rgba(255,226,168,.7)"; context.lineWidth = 8; context.beginPath(); context.ellipse(width - 80, 142, 70, 18, -.25, 0, Math.PI * 2); context.stroke();
       } else {
         context.fillStyle = "#ffe58b"; context.beginPath(); context.arc(width - 62, 112, 36, 0, Math.PI * 2); context.fill();
@@ -525,9 +526,8 @@ export default function MonsoonGame() {
               platform.powerUsed = true; updateMission("gadgets");
               if (platform.powerUp === "boots") { game.bootsJumpsRemaining = 5; celebrate("SPRING BOOTS · 5 JUMPS"); }
               if (platform.powerUp === "magnet") { game.magnetUntil = time + 8000; celebrate("BASKET MAGNET · 8 SECONDS"); playSfx("collect"); }
-              if (platform.powerUp === "shield") { game.shieldCharges = 1; celebrate("UMBRELLA SHIELD READY"); playSfx("level"); }
               if (platform.powerUp === "slow") { game.slowUntil = time + 7000; celebrate("TIME BELL · WORLD SLOWED"); playSfx("level"); }
-              if (platform.powerUp === "cloud") { game.cloudCharges = 1; celebrate("CLOUD RESCUE READY"); playSfx("level"); }
+              if (platform.powerUp === "cloud") { game.cloudCharges = 1; celebrate("RESCUE CLOUD · SAVES YOUR NEXT FALL"); playSfx("level"); }
               if (platform.powerUp === "door") {
                 const choices = WORLDS.map((_, index) => index).filter((index) => index !== game.worldIndex); const nextWorld = choices[Math.floor(Math.random() * choices.length)]; game.worldIndex = nextWorld; game.worldStage += 1; setWorldIndex(nextWorld); setWorldToast(true); window.setTimeout(() => setWorldToast(false), 1400); player.vy = -20; usedDoor = true; updateMission("worlds"); if (game.worldStage >= 5) unlockAchievement("five-worlds"); celebrate("ANYWHERE DOOR · NEW WORLD"); playSfx("level");
               }
@@ -546,7 +546,7 @@ export default function MonsoonGame() {
         const visibleBoards = game.platforms.filter((platform) => !platform.broken && platform.y + platform.h >= 0 && platform.y <= height);
         const lowestVisibleBoard = visibleBoards.reduce<Platform | null>((lowest, platform) => !lowest || platform.y > lowest.y ? platform : lowest, null);
         const fellBelowLastBoard = lowestVisibleBoard ? player.y > lowestVisibleBoard.y + lowestVisibleBoard.h + 18 : player.y > height + 24;
-        if (fellBelowLastBoard && game.cloudCharges > 0) { game.cloudCharges -= 1; const rescueY = Math.min(height - 70, player.y + player.h + 12); game.platforms.push({ x: clamp(player.x - 34, 8, width - 96), y: rescueY, w: 96, h: 13, basket: null, collected: true, drift: 0, kind: "normal", broken: false, powerUp: null, powerUsed: true }); player.y = rescueY - player.h; player.vy = -12.5; celebrate("CLOUD RESCUE!"); playSfx("level"); }
+        if (fellBelowLastBoard && game.cloudCharges > 0) { game.cloudCharges -= 1; const rescueY = Math.min(height - 70, player.y + player.h + 12); game.platforms.push({ x: clamp(player.x - 34, 8, width - 96), y: rescueY, w: 96, h: 13, basket: null, collected: true, drift: 0, kind: "normal", broken: false, powerUp: null, powerUsed: true, rescueCloud: true }); player.y = rescueY - player.h; player.vy = -14.5; celebrate("RESCUE CLOUD CAUGHT YOU!"); playSfx("level"); }
         else if (fellBelowLastBoard) beginFall();
       }
 
@@ -554,7 +554,8 @@ export default function MonsoonGame() {
         const shift = height * 0.4 - player.y; player.y = height * 0.4; game.distance += shift;
         for (const platform of game.platforms) platform.y += shift;
         for (const boots of game.fallingBoots) boots.y += shift;
-        game.score = Math.max(game.score, Math.floor(game.distance * 2)); setScore(game.score);
+        game.score = Math.max(game.score, Math.floor(game.distance * 2));
+        if (time - game.lastHudUpdate >= 80) { game.lastHudUpdate = time; setScore(game.score); }
       }
       const missedGoodie = game.platforms.some((platform) => platform.y >= height + 40 && platform.basket != null && !platform.collected);
       if (missedGoodie && game.combo > 0) { game.combo = 0; setCombo(0); }
@@ -566,10 +567,10 @@ export default function MonsoonGame() {
         const x = clamp(previous.x + (Math.random() - 0.5) * Math.min(205 + difficulty * 30, width * (.5 + difficulty * .08)), 10, width - w - 10);
         const extras = platformExtras(game.basketCursor, game.score);
         const withBasket = game.basketCursor % 3 !== 0 && !extras.powerUp;
-        const gap = 62 + difficulty * 17 + Math.random() * (9 + difficulty * 7);
+        const gap = 66 + difficulty * 17 + Math.random() * (8 + difficulty * 7);
         const platform: Platform = { x, y: top - gap, w, h: 13, basket: withBasket ? game.basketCursor % BASKETS.length : null, collected: false, drift: platformDrift(game.basketCursor, game.score), ...extras };
         game.platforms.push(platform);
-        if (platform.kind === "breakable" || game.basketCursor % (game.score < SCORE_GATES.breakableBoards ? 4 : 5) === 0) game.platforms.push(sideBoard(platform, width));
+        if (platform.kind === "breakable" || game.basketCursor % (game.score < SCORE_GATES.breakableBoards ? 6 : 5) === 0) game.platforms.push(sideBoard(platform, width));
         game.basketCursor += 1;
       }
 
@@ -597,15 +598,14 @@ export default function MonsoonGame() {
             target.health -= 1; fireball.life = 0;
             if (target.health <= 0) {
               target.alive = false; game.villainsDefeated += 1; game.score += target.boss ? 2000 : 250;
-              if (target.boss) { game.runs += 50; game.shieldCharges = 1; setRuns(game.runs); celebrate("BOSS DEFEATED · +50 RUNS · SHIELD!"); playSfx("level"); }
+              if (target.boss) { game.runs += 50; setRuns(game.runs); celebrate("BOSS DEFEATED · +50 RUNS!"); playSfx("level"); }
               setVillainsDefeated(game.villainsDefeated); setScore(game.score); updateMission("villains"); updateMission("score", game.score, true); if (game.villainsDefeated >= 5) unlockAchievement("villain-hunter");
             } else celebrate(`BOSS HIT · ${target.health} LEFT`);
           }
         }
         game.fireballs = game.fireballs.filter((fireball) => fireball.life > 0);
         const collision = game.villains.find((villain) => villain.alive && player.x + player.w > villain.x + 5 && player.x < villain.x + villain.w - 5 && player.y + player.h > villain.y + 5 && player.y < villain.y + villain.h - 5);
-        if (collision && game.shieldCharges > 0) { game.shieldCharges -= 1; if (collision.boss) { collision.x += collision.vx > 0 ? -90 : 90; collision.baseY -= 90; } else collision.alive = false; player.vy = -12; celebrate("SHIELD SAVED YOU!"); playSfx("break"); }
-        else if (collision) beginFall();
+        if (collision) beginFall();
       }
 
       const targetWorldStage = Math.floor(game.score / SCORE_GATES.worldChange);
@@ -616,19 +616,26 @@ export default function MonsoonGame() {
         game.worldIndex = nextWorld; setWorldIndex(nextWorld); setWorldToast(true); playSfx("level"); window.setTimeout(() => setWorldToast(false), 1400);
         updateMission("worlds"); if (game.worldStage >= 5) unlockAchievement("five-worlds");
       }
-      updateMission("score", game.score, true); if (game.score >= 100000) unlockAchievement("score-100k");
+      if (game.score - game.lastMissionScore >= 250) { game.lastMissionScore = Math.floor(game.score / 250) * 250; updateMission("score", game.score, true); }
+      if (game.score >= 100000) unlockAchievement("score-100k");
 
-      const candidate = game.platforms.filter((platform) => platform.basket != null && !platform.collected && !platform.broken).sort((a, b) => Math.abs(a.y - player.y) - Math.abs(b.y - player.y))[0];
+      let candidate: Platform | undefined; let candidateDistance = Number.POSITIVE_INFINITY;
+      for (const platform of game.platforms) { if (platform.basket == null || platform.collected || platform.broken) continue; const distance = Math.abs(platform.y - player.y); if (distance < candidateDistance) { candidate = platform; candidateDistance = distance; } }
       if (candidate?.basket != null && candidate.basket !== game.nearbyBasket) { game.nearbyBasket = candidate.basket; setNearbyBasket(candidate.basket); }
       for (const boots of game.fallingBoots) { boots.vy += .22 * dt; boots.y += boots.vy * dt; boots.spin += .13 * dt; boots.life -= dt; }
       game.fallingBoots = game.fallingBoots.filter((boots) => boots.life > 0 && boots.y < height + 60);
       drawWorld(WORLDS[game.worldIndex].scene, time, width, height);
 
       for (const platform of game.platforms) {
-        const grad = context.createLinearGradient(platform.x, platform.y, platform.x, platform.y + 14);
-        if (platform.kind === "breakable") { grad.addColorStop(0, "#ff9b79"); grad.addColorStop(1, "#9d3d43"); } else { grad.addColorStop(0, "#ffe17c"); grad.addColorStop(1, "#c37b17"); }
-        context.fillStyle = grad; context.beginPath(); context.roundRect(platform.x, platform.y, platform.w, platform.h, 7); context.fill();
-        context.fillStyle = "rgba(255,255,255,.45)"; context.beginPath(); context.roundRect(platform.x + 8, platform.y + 2, platform.w - 16, 2, 2); context.fill();
+        if (platform.rescueCloud) {
+          const cx = platform.x + platform.w / 2; context.save(); context.translate(cx, platform.y + 3);
+          context.fillStyle = "rgba(226,251,255,.96)"; context.strokeStyle = "#48bfc7"; context.lineWidth = 2;
+          context.beginPath(); context.arc(-29, 0, 14, 0, Math.PI * 2); context.arc(-13, -8, 18, 0, Math.PI * 2); context.arc(8, -10, 21, 0, Math.PI * 2); context.arc(29, 0, 15, 0, Math.PI * 2); context.roundRect(-39, -2, 78, 18, 9); context.fill(); context.stroke();
+          context.fillStyle = "#07506b"; context.font = "900 8px system-ui"; context.textAlign = "center"; context.fillText("RESCUE", 0, 7); context.restore();
+        } else {
+          context.fillStyle = platform.kind === "breakable" ? "#ce6258" : "#dca52b"; context.beginPath(); context.roundRect(platform.x, platform.y, platform.w, platform.h, 7); context.fill();
+          context.fillStyle = "rgba(255,255,255,.45)"; context.beginPath(); context.roundRect(platform.x + 8, platform.y + 2, platform.w - 16, 2, 2); context.fill();
+        }
         if (platform.kind === "breakable") { context.strokeStyle = "rgba(70,12,24,.75)"; context.lineWidth = 1.5; context.beginPath(); context.moveTo(platform.x + platform.w * .48, platform.y + 1); context.lineTo(platform.x + platform.w * .58, platform.y + 7); context.lineTo(platform.x + platform.w * .45, platform.y + 12); context.stroke(); }
         if (platform.powerUp === "boots" && !platform.powerUsed) {
           const cx = platform.x + platform.w / 2; context.save(); context.translate(cx, platform.y - 3);
@@ -689,10 +696,9 @@ export default function MonsoonGame() {
       const upgradeTier = Math.min(game.worldStage, 5);
       const outfitColors = ["#0cd8ba", "#ff9f1c", "#9b5de5", "#ef476f", "#00bbf9", "#ffe17c"];
       const doremonColors = ["#169fe3", "#7657e8", "#10bfa5", "#ef476f", "#f2a51a", "#37b45b", "#e456b4", "#465ce8"];
-      const outfitColor = outfitColors[game.worldStage % outfitColors.length];
+      const outfitColor = outfitColors[game.worldStage % outfitColors.length]; const accessoryMode = game.worldStage % 5;
       const doremonColor = doremonColors[game.worldStage % doremonColors.length];
       if (time < game.magnetUntil) { context.strokeStyle = "rgba(12,216,186,.5)"; context.lineWidth = 2; context.beginPath(); context.arc(0, 0, 39 + Math.sin(time / 120) * 4, 0, Math.PI * 2); context.stroke(); }
-      if (upgradeTier >= 2) { context.fillStyle = `${outfitColor}bb`; context.beginPath(); context.moveTo(-16, 3); context.quadraticCurveTo(-31, 18, -23, 37); context.lineTo(-2, 19); context.closePath(); context.fill(); }
       if (droning) {
         context.strokeStyle = "#dffcff"; context.lineWidth = 2.4; const rotors = [[-34, -13], [-31, 11], [31, 11], [34, -13]];
         for (const [rx, ry] of rotors) { context.beginPath(); context.moveTo(Math.sign(rx) * 10, ry * .35); context.lineTo(rx, ry); context.stroke(); context.fillStyle = "rgba(223,252,255,.9)"; context.beginPath(); context.ellipse(rx, ry, 12 + Math.sin(time / 38 + rx) * 2, 3, 0, 0, Math.PI * 2); context.fill(); }
@@ -703,24 +709,22 @@ export default function MonsoonGame() {
       if (sprite?.complete && sprite.naturalWidth > 0) {
         if (game.worldStage === 0) context.drawImage(sprite, -33, -38, 66, 66);
         else {
-          if (!tintedSpriteCanvasRef.current) { tintedSpriteCanvasRef.current = document.createElement("canvas"); tintedSpriteCanvasRef.current.width = 66; tintedSpriteCanvasRef.current.height = 66; }
-          const tintCanvas = tintedSpriteCanvasRef.current; const tintContext = tintCanvas.getContext("2d");
-          if (tintContext) {
-            tintContext.clearRect(0, 0, 66, 66); tintContext.globalCompositeOperation = "source-over"; tintContext.globalAlpha = 1; tintContext.drawImage(sprite, 0, 0, 66, 66);
-            tintContext.globalCompositeOperation = "color"; tintContext.fillStyle = doremonColor; tintContext.fillRect(0, 0, 66, 66);
-            tintContext.globalCompositeOperation = "destination-in"; tintContext.drawImage(sprite, 0, 0, 66, 66); tintContext.globalCompositeOperation = "source-over";
-            context.drawImage(tintCanvas, -33, -38, 66, 66);
-          } else context.drawImage(sprite, -33, -38, 66, 66);
+          const tintKey = `${sprite.src}|${doremonColor}`; let tintCanvas = tintedSpriteCacheRef.current.get(tintKey);
+          if (!tintCanvas) {
+            tintCanvas = document.createElement("canvas"); tintCanvas.width = 66; tintCanvas.height = 66; const tintContext = tintCanvas.getContext("2d", { willReadFrequently: true }); tintContext?.drawImage(sprite, 0, 0, 66, 66);
+            if (tintContext) { const pixels = tintContext.getImageData(0, 0, 66, 66); const target = [Number.parseInt(doremonColor.slice(1, 3), 16), Number.parseInt(doremonColor.slice(3, 5), 16), Number.parseInt(doremonColor.slice(5, 7), 16)]; for (let i = 0; i < pixels.data.length; i += 4) { const red = pixels.data[i], green = pixels.data[i + 1], blue = pixels.data[i + 2]; if (blue > 105 && blue > red * 1.28 && blue > green * 1.08) { const shade = .56 + ((red + green + blue) / 765) * .62; pixels.data[i] = Math.min(255, target[0] * shade); pixels.data[i + 1] = Math.min(255, target[1] * shade); pixels.data[i + 2] = Math.min(255, target[2] * shade); } } tintContext.putImageData(pixels, 0, 0); }
+            tintedSpriteCacheRef.current.set(tintKey, tintCanvas);
+          }
+          context.drawImage(tintCanvas, -33, -38, 66, 66);
         }
       }
       else { context.fillStyle = "#169fe3"; context.beginPath(); context.arc(0, 0, 20, 0, Math.PI * 2); context.fill(); }
-      if (upgradeTier >= 1) { context.fillStyle = outfitColor; context.beginPath(); context.roundRect(-14, 5, 28, 13, 6); context.fill(); context.fillStyle = "rgba(255,255,255,.75)"; context.beginPath(); context.arc(0, 11, 3, 0, Math.PI * 2); context.fill(); }
+      if (upgradeTier >= 1 && accessoryMode === 1) { context.fillStyle = outfitColor; context.beginPath(); context.roundRect(-16, 4, 32, 8, 4); context.fill(); context.beginPath(); context.moveTo(10, 8); context.lineTo(22, 19); context.lineTo(10, 15); context.closePath(); context.fill(); }
       if (wearingSpringBoots) { for (const side of [-1, 1]) { const bx = side * 11; context.strokeStyle = "#dffcff"; context.lineWidth = 2; context.beginPath(); context.moveTo(bx - 4, 22); context.lineTo(bx + 4, 26); context.lineTo(bx - 4, 30); context.lineTo(bx + 4, 34); context.stroke(); context.fillStyle = "#0cd8ba"; context.beginPath(); context.roundRect(bx - 8, 31, 18, 8, 3); context.fill(); } }
-      if (upgradeTier >= 3) { context.fillStyle = "#ffe17c"; context.strokeStyle = "#9d6616"; context.lineWidth = 1.5; context.beginPath(); context.moveTo(-15, -29); context.lineTo(-11, -43); context.lineTo(-3, -33); context.lineTo(3, -45); context.lineTo(10, -33); context.lineTo(16, -43); context.lineTo(15, -27); context.closePath(); context.fill(); context.stroke(); }
-      if (upgradeTier >= 4) { context.strokeStyle = "#ffe17c"; context.lineWidth = 3; context.beginPath(); context.moveTo(18, 8); context.lineTo(35, -15); context.stroke(); context.fillStyle = outfitColor; context.beginPath(); for (let i = 0; i < 10; i += 1) { const radius = i % 2 === 0 ? 8 : 3.5; const angle = -Math.PI / 2 + i * Math.PI / 5; const sx = 36 + Math.cos(angle) * radius; const sy = -18 + Math.sin(angle) * radius; if (i === 0) context.moveTo(sx, sy); else context.lineTo(sx, sy); } context.closePath(); context.fill(); }
-      if (upgradeTier >= 5) { context.fillStyle = "#fff7a8"; for (let i = 0; i < 5; i += 1) { const angle = time / 430 + i * Math.PI * .4; context.beginPath(); context.arc(Math.cos(angle) * 43, Math.sin(angle) * 35, 2.2, 0, Math.PI * 2); context.fill(); } }
-      if (game.shieldCharges > 0) { context.strokeStyle = "rgba(223,252,255,.9)"; context.lineWidth = 3; context.beginPath(); context.arc(0, -2, 38, Math.PI, Math.PI * 2); context.stroke(); context.beginPath(); context.moveTo(0, -40); context.lineTo(0, 24); context.quadraticCurveTo(0, 31, 7, 27); context.stroke(); }
-      if (game.cloudCharges > 0) { context.fillStyle = "rgba(255,255,255,.86)"; context.beginPath(); context.arc(-24, 31, 7, 0, Math.PI * 2); context.arc(-15, 28, 9, 0, Math.PI * 2); context.arc(-7, 32, 6, 0, Math.PI * 2); context.fill(); }
+      if (upgradeTier >= 3 && accessoryMode === 3) { context.fillStyle = "#ffe17c"; context.strokeStyle = "#9d6616"; context.lineWidth = 1.4; context.beginPath(); context.moveTo(-13, -29); context.lineTo(-9, -40); context.lineTo(-2, -33); context.lineTo(3, -42); context.lineTo(9, -33); context.lineTo(14, -40); context.lineTo(13, -28); context.closePath(); context.fill(); context.stroke(); }
+      if (upgradeTier >= 4 && accessoryMode === 4) { context.strokeStyle = "#f4c64f"; context.lineCap = "round"; context.lineWidth = 2.2; context.beginPath(); context.moveTo(17, 8); context.lineTo(25, -4); context.stroke(); context.fillStyle = outfitColor; context.beginPath(); context.arc(27, -7, 4, 0, Math.PI * 2); context.fill(); context.fillStyle = "#fff7a8"; context.beginPath(); context.arc(27, -7, 1.4, 0, Math.PI * 2); context.fill(); }
+      if (upgradeTier >= 5 && accessoryMode === 0) { context.fillStyle = "#fff7a8"; for (let i = 0; i < 3; i += 1) { const angle = time / 560 + i * Math.PI * 2 / 3; context.beginPath(); context.arc(Math.cos(angle) * 38, Math.sin(angle) * 30, 1.8, 0, Math.PI * 2); context.fill(); } }
+      if (game.cloudCharges > 0) { context.save(); context.translate(-25, 30); context.fillStyle = "rgba(232,252,255,.96)"; context.strokeStyle = "#48bfc7"; context.lineWidth = 1.5; context.beginPath(); context.arc(-7, 1, 6, 0, Math.PI * 2); context.arc(1, -3, 9, 0, Math.PI * 2); context.arc(11, 1, 7, 0, Math.PI * 2); context.roundRect(-12, 0, 28, 9, 5); context.fill(); context.stroke(); context.fillStyle = "#f4b91f"; context.beginPath(); context.arc(15, -7, 7, 0, Math.PI * 2); context.fill(); context.fillStyle = "#08223a"; context.font = "900 8px system-ui"; context.textAlign = "center"; context.fillText("1", 15, -4); context.restore(); }
       context.restore();
 
       if (game.isFalling && time - game.fallStarted > 1650) {
@@ -773,7 +777,7 @@ export default function MonsoonGame() {
         <div className="quick-rules" aria-label="How to play">
           <span>↔ <b>Tilt to move</b></span>
           <span>🧺 <b>Collect baskets</b></span>
-          <span>✣ <b>Drone boost</b></span>
+          <span>☁ <b>Cloud saves one fall</b></span>
         </div>
 
         <div className="intro-details">

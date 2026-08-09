@@ -51,6 +51,8 @@ const ACHIEVEMENTS = [
   { id: "every-basket", icon: "◆", label: "Every Basket Collected" },
 ] as const;
 
+const GADGET_ICONS: Partial<Record<Exclude<PowerUp, null>, string>> = { magnet: "🧲", shield: "☂️", slow: "🔔", cloud: "☁️", door: "🚪" };
+
 const BASKETS: Basket[] = [
   { name: "HNI Prime–Growth at a Fair Price Asset Allocation", fee: "₹1,00,000", runs: 200, short: "HNI", icon: "◆" },
   { name: "Core Consumption Compounders Fundamental", fee: "₹70,800", runs: 140, short: "CORE", icon: "◉" },
@@ -127,20 +129,28 @@ function rewardPoints(runs: number) {
   return 90000 + Math.floor((runs - 900) / 50) * 5000;
 }
 
+function createMissions(): Mission[] {
+  return [...MISSION_POOL].sort(() => Math.random() - .5).slice(0, 3).map((mission) => ({ ...mission, progress: 0, complete: false }));
+}
+
 export default function MonsoonGame() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const frameRef = useRef<number | null>(null);
   const spriteRef = useRef<HTMLImageElement | null>(null);
   const runSpriteRef = useRef<HTMLImageElement | null>(null);
+  const tintedSpriteCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const audioRef = useRef<AudioContext | null>(null);
   const clipRefs = useRef<Partial<Record<SoundKind, HTMLAudioElement>>>({});
   const mutedRef = useRef(false);
+  const orientationHandlerRef = useRef<((event: DeviceOrientationEvent) => void) | null>(null);
+  const celebrationTimerRef = useRef<number | null>(null);
   const gameRef = useRef({
     player: { x: 180, y: 500, vx: 0, vy: -10, w: 34, h: 44 },
     platforms: [] as Platform[], input: 0, pointerX: null as number | null,
     score: 0, runs: 0, distance: 0, basketCursor: 0, lastTime: 0, width: 390, height: 700,
-    collectionCounts: Array(BASKETS.length).fill(0) as number[], droneUntil: 0, bootsJumpsRemaining: 0, fallingBoots: [] as FallingBoots[], worldIndex: 0, worldStage: 0, nextWorldChangeAt: 0, nearbyBasket: -1, isFalling: false, fallStarted: 0, resultSubmitted: false,
-    villains: [] as Villain[], fireballs: [] as Fireball[], nextVillainAt: 0, villainCursor: 0, villainsDefeated: 0,
+    collectionCounts: Array(BASKETS.length).fill(0) as number[], droneUntil: 0, bootsJumpsRemaining: 0, fallingBoots: [] as FallingBoots[], magnetUntil: 0, slowUntil: 0, shieldCharges: 0, cloudCharges: 0,
+    combo: 0, bestCombo: 0, missions: [] as Mission[], achievements: [] as string[], worldIndex: 0, worldStage: 0, nextWorldChangeAt: 0, nearbyBasket: -1, isFalling: false, fallStarted: 0, resultSubmitted: false,
+    villains: [] as Villain[], fireballs: [] as Fireball[], nextVillainAt: 0, nextBossScore: 50000, villainCursor: 0, villainsDefeated: 0,
   });
   const [screen, setScreen] = useState<Screen>("intro");
   const [name, setName] = useState("");
@@ -150,7 +160,7 @@ export default function MonsoonGame() {
   const [runs, setRuns] = useState(0);
   const [best, setBest] = useState(0);
   const [control, setControl] = useState("Touch / keys ready");
-  const [toast, setToast] = useState<Basket | null>(null);
+  const [toast, setToast] = useState<{ basket: Basket; awarded: number; multiplier: number } | null>(null);
   const [collectionCounts, setCollectionCounts] = useState<number[]>(() => Array(BASKETS.length).fill(0));
   const [worldIndex, setWorldIndex] = useState(0);
   const [worldToast, setWorldToast] = useState(false);
@@ -165,28 +175,41 @@ export default function MonsoonGame() {
   const [installNote, setInstallNote] = useState("");
   const [isInstalled, setIsInstalled] = useState(false);
   const [showTiltGuide, setShowTiltGuide] = useState(false);
+  const [combo, setCombo] = useState(0);
+  const [bestCombo, setBestCombo] = useState(0);
+  const [missions, setMissions] = useState<Mission[]>([]);
+  const [showMissions, setShowMissions] = useState(false);
+  const [celebration, setCelebration] = useState("");
+  const [achievements, setAchievements] = useState<string[]>([]);
+  const [calibrationMessage, setCalibrationMessage] = useState("");
 
   useEffect(() => {
-    setBest(Number(localStorage.getItem("monsoon-bonanza-best") || 0));
-    try {
-      const savedPlayer = JSON.parse(localStorage.getItem("monsoon-bonanza-player") || "null") as { name?: unknown; mobile?: unknown; branch?: unknown } | null;
-      if (savedPlayer && typeof savedPlayer.name === "string" && typeof savedPlayer.mobile === "string" && typeof savedPlayer.branch === "string") {
-        setName(savedPlayer.name); setMobile(savedPlayer.mobile); setBranch(savedPlayer.branch);
-      }
-    } catch { /* Ignore incomplete or manually edited device data. */ }
+    const hydrateTimer = window.setTimeout(() => {
+      setBest(Number(localStorage.getItem("monsoon-bonanza-best") || 0));
+      try {
+        const savedPlayer = JSON.parse(localStorage.getItem("monsoon-bonanza-player") || "null") as { name?: unknown; mobile?: unknown; branch?: unknown } | null;
+        if (savedPlayer && typeof savedPlayer.name === "string" && typeof savedPlayer.mobile === "string" && typeof savedPlayer.branch === "string") {
+          setName(savedPlayer.name); setMobile(savedPlayer.mobile); setBranch(savedPlayer.branch);
+        }
+      } catch { /* Ignore incomplete or manually edited device data. */ }
+      try {
+        const savedAchievements = JSON.parse(localStorage.getItem("doremon-jump-achievements") || "[]") as unknown;
+        if (Array.isArray(savedAchievements)) { const unlocked = savedAchievements.filter((id): id is string => typeof id === "string"); gameRef.current.achievements = unlocked; setAchievements(unlocked); }
+      } catch { /* Ignore incomplete or manually edited achievement data. */ }
+      const standalone = window.matchMedia("(display-mode: standalone)").matches || Boolean((navigator as Navigator & { standalone?: boolean }).standalone);
+      setIsInstalled(standalone);
+    }, 0);
     const image = new Image(); image.src = "/doraemon-sprite.png"; spriteRef.current = image;
     const runImage = new Image(); runImage.src = "/doraemon-run.png"; runSpriteRef.current = runImage;
     for (const [kind, source] of Object.entries(SOUND_FILES) as [SoundKind, string][]) {
       const clip = new Audio(source); clip.preload = "auto"; clipRefs.current[kind] = clip;
     }
     if ("serviceWorker" in navigator) void navigator.serviceWorker.register("/sw.js");
-    const standalone = window.matchMedia("(display-mode: standalone)").matches || Boolean((navigator as Navigator & { standalone?: boolean }).standalone);
-    setIsInstalled(standalone);
     const captureInstall = (event: Event) => { event.preventDefault(); setInstallPrompt(event as InstallPromptEvent); };
     const markInstalled = () => { setIsInstalled(true); setInstallPrompt(null); setInstallNote("Installed — open Doremon Jump from your home screen."); };
     window.addEventListener("beforeinstallprompt", captureInstall);
     window.addEventListener("appinstalled", markInstalled);
-    return () => { window.removeEventListener("beforeinstallprompt", captureInstall); window.removeEventListener("appinstalled", markInstalled); };
+    return () => { window.clearTimeout(hydrateTimer); window.removeEventListener("beforeinstallprompt", captureInstall); window.removeEventListener("appinstalled", markInstalled); if (orientationHandlerRef.current) window.removeEventListener("deviceorientation", orientationHandlerRef.current); if (celebrationTimerRef.current) window.clearTimeout(celebrationTimerRef.current); };
   }, []);
 
   const installApp = async () => {
@@ -232,6 +255,36 @@ export default function MonsoonGame() {
     else playToneSequence();
   }, []);
 
+  const celebrate = useCallback((message: string) => {
+    setCelebration(message);
+    if (celebrationTimerRef.current) window.clearTimeout(celebrationTimerRef.current);
+    celebrationTimerRef.current = window.setTimeout(() => setCelebration(""), 950);
+  }, []);
+
+  const updateMission = useCallback((kind: MissionKind, value = 1, absolute = false) => {
+    let completedLabel = ""; let changed = false;
+    const updated = gameRef.current.missions.map((mission) => {
+      if (mission.id !== kind || mission.complete) return mission;
+      const nextValue = absolute && kind === "score" ? Math.floor(value / 250) * 250 : value;
+      const progress = Math.min(mission.target, absolute ? nextValue : mission.progress + value);
+      if (progress === mission.progress) return mission;
+      changed = true;
+      const complete = progress >= mission.target;
+      if (complete && !mission.complete) completedLabel = mission.label;
+      return { ...mission, progress, complete };
+    });
+    if (!changed) return;
+    gameRef.current.missions = updated; setMissions([...updated]);
+    if (completedLabel) { celebrate(`MISSION COMPLETE · ${completedLabel}`); playSfx("level"); }
+  }, [celebrate, playSfx]);
+
+  const unlockAchievement = useCallback((id: string) => {
+    const game = gameRef.current;
+    if (game.achievements.includes(id)) return;
+    game.achievements.push(id); const unlocked = [...game.achievements]; setAchievements(unlocked); localStorage.setItem("doremon-jump-achievements", JSON.stringify(unlocked));
+    const achievement = ACHIEVEMENTS.find((item) => item.id === id); if (achievement) celebrate(`ACHIEVEMENT · ${achievement.label}`);
+  }, [celebrate]);
+
   const makePlatforms = useCallback((width: number, height: number) => {
     const items: Platform[] = [{ x: width / 2 - 52, y: height - 75, w: 104, h: 13, basket: null, collected: true, drift: 0, ...platformExtras(0) }];
     let y = height - 155;
@@ -260,9 +313,12 @@ export default function MonsoonGame() {
     game.platforms = makePlatforms(width, height);
     game.input = 0; game.pointerX = null; game.score = 0; game.runs = 0; game.distance = 0; game.basketCursor = 4; game.lastTime = 0;
     const firstWorld = Math.floor(Math.random() * WORLDS.length);
-    game.collectionCounts = Array(BASKETS.length).fill(0); game.droneUntil = 0; game.bootsJumpsRemaining = 0; game.fallingBoots = []; game.worldIndex = firstWorld; game.worldStage = 0; game.nextWorldChangeAt = 0; game.nearbyBasket = 1; game.isFalling = false; game.fallStarted = 0; game.resultSubmitted = false;
-    game.villains = []; game.fireballs = []; game.nextVillainAt = 0; game.villainCursor = 0; game.villainsDefeated = 0;
-    setScore(0); setRuns(0); setToast(null); setCollectionCounts(Array(BASKETS.length).fill(0)); setWorldIndex(firstWorld); setWorldToast(false); setNearbyBasket(1); setFalling(false); setVillainsDefeated(0); setResultStatus("idle"); setShowTiltGuide(true);
+    const runMissions = createMissions();
+    game.collectionCounts = Array(BASKETS.length).fill(0); game.droneUntil = 0; game.bootsJumpsRemaining = 0; game.fallingBoots = []; game.magnetUntil = 0; game.slowUntil = 0; game.shieldCharges = 0; game.cloudCharges = 0; game.combo = 0; game.bestCombo = 0; game.missions = runMissions; game.worldIndex = firstWorld; game.worldStage = 0; game.nextWorldChangeAt = 0; game.nearbyBasket = 1; game.isFalling = false; game.fallStarted = 0; game.resultSubmitted = false;
+    game.villains = []; game.fireballs = []; game.nextVillainAt = 0; game.nextBossScore = 50000; game.villainCursor = 0; game.villainsDefeated = 0;
+    setScore(0); setRuns(0); setToast(null); setCollectionCounts(Array(BASKETS.length).fill(0)); setWorldIndex(firstWorld); setWorldToast(false); setNearbyBasket(1); setFalling(false); setVillainsDefeated(0); setResultStatus("idle"); setShowTiltGuide(true); setCombo(0); setBestCombo(0); setMissions(runMissions); setShowMissions(false);
+    window.setTimeout(() => setShowMissions(true), 4700);
+    window.setTimeout(() => setShowMissions(false), 8900);
   }, [makePlatforms]);
 
   const enableMotion = useCallback(async () => {
@@ -272,14 +328,17 @@ export default function MonsoonGame() {
         const permission = await Orientation.requestPermission();
         if (permission !== "granted") { setControl("Touch / keys active"); return; }
       }
+      if (orientationHandlerRef.current) window.removeEventListener("deviceorientation", orientationHandlerRef.current);
+      const samples: number[] = []; let center = 0; let calibrating = true;
       const handler = (event: DeviceOrientationEvent) => {
         if (event.gamma == null) return;
-        gameRef.current.input = clamp(event.gamma / 24, -1, 1);
-        setControl("Tilt active");
-        if (Math.abs(event.gamma) > 2) setShowTiltGuide(false);
+        if (calibrating) { samples.push(event.gamma); return; }
+        const tilt = event.gamma - center; gameRef.current.input = clamp(tilt / 24, -1, 1); setControl("Tilt calibrated");
+        if (Math.abs(tilt) > 2) setShowTiltGuide(false);
       };
+      orientationHandlerRef.current = handler;
       window.addEventListener("deviceorientation", handler, { passive: true });
-      window.setTimeout(() => setControl((current) => current === "Tilt active" ? current : "Touch / keys active"), 1200);
+      await new Promise<void>((resolve) => window.setTimeout(() => { center = samples.length ? samples.reduce((sum, value) => sum + value, 0) / samples.length : 0; calibrating = false; setControl(samples.length ? "Tilt calibrated" : "Touch / keys active"); resolve(); }, 1300));
     } catch { setControl("Touch / keys active"); }
   }, []);
 
@@ -289,6 +348,7 @@ export default function MonsoonGame() {
       name: name.trim(), mobile, branch: branch.trim(), campaign: "Doremon Jump",
       score: String(finalScore), runs: String(finalRuns), rewardPoints: String(rewardPoints(finalRuns)),
       goodiesCollected: String(goodies), villainsDefeated: String(defeated), worldReached: WORLDS[finalWorld].name,
+      bestCombo: String(gameRef.current.bestCombo), missionsCompleted: String(gameRef.current.missions.filter((mission) => mission.complete).length), achievementsUnlocked: String(gameRef.current.achievements.length),
       basketBreakdown: JSON.stringify(BASKETS.flatMap((basket, index) => counts[index] > 0 ? [{ basket: basket.name, count: counts[index], runs: basket.runs * counts[index] }] : [])),
       completedAt: new Date().toISOString(),
     };
@@ -313,10 +373,10 @@ export default function MonsoonGame() {
     if (!name.trim()) { setFormError("Please enter your name."); return; }
     if (!/^[6-9]\d{9}$/.test(mobile)) { setFormError("Enter a valid 10-digit Indian mobile number."); return; }
     if (!branch.trim()) { setFormError("Please enter your branch."); return; }
-    setSubmitting(true); setFormError("");
+    setSubmitting(true); setFormError(""); setCalibrationMessage("Hold your phone naturally while controls calibrate…");
     localStorage.setItem("monsoon-bonanza-player", JSON.stringify({ name: name.trim(), mobile, branch: branch.trim(), campaign: "Doremon Jump" }));
     await enableMotion();
-    playSfx("start"); resetGame(); setScreen("playing"); setSubmitting(false);
+    setCalibrationMessage(""); playSfx("start"); resetGame(); setScreen("playing"); setSubmitting(false);
   };
 
   useEffect(() => {
@@ -428,6 +488,7 @@ export default function MonsoonGame() {
       const previousBottom = player.y + player.h;
       const droning = time < game.droneUntil;
       const wearingSpringBoots = game.bootsJumpsRemaining > 0;
+      const worldSpeed = time < game.slowUntil ? .38 : 1;
       player.x += player.vx * dt; player.vy += (game.isFalling ? .16 : droning ? 0.12 : 0.48) * dt; player.y += player.vy * dt;
       if (player.x < -player.w * .45) player.x = width - player.w * .55;
       if (player.x > width - player.w * .55) player.x = -player.w * .45;
@@ -435,28 +496,44 @@ export default function MonsoonGame() {
       const collectBasket = (platform: Platform) => {
         if (platform.basket == null || platform.collected) return;
         platform.collected = true;
-        const basket = BASKETS[platform.basket]; game.runs += basket.runs; game.score += basket.runs * 10;
+        const basket = BASKETS[platform.basket]; game.combo = Math.min(5, game.combo + 1); game.bestCombo = Math.max(game.bestCombo, game.combo); const awardedRuns = basket.runs * game.combo; game.runs += awardedRuns; game.score += awardedRuns * 10;
         game.collectionCounts[platform.basket] += 1;
         game.nextWorldChangeAt = Math.max(game.nextWorldChangeAt, time + 1900);
-        setScore(game.score); setRuns(game.runs); setCollectionCounts([...game.collectionCounts]); setToast(basket); playSfx("collect"); window.setTimeout(() => setToast(null), 2200);
+        setScore(game.score); setRuns(game.runs); setCombo(game.combo); setBestCombo(game.bestCombo); setCollectionCounts([...game.collectionCounts]); setToast({ basket, awarded: awardedRuns, multiplier: game.combo }); playSfx("collect"); window.setTimeout(() => setToast(null), 2200);
+        updateMission("baskets"); updateMission("combo", game.bestCombo, true); updateMission("score", game.score, true);
+        if ([2, 3, 5].includes(game.combo)) celebrate(`${game.combo}× BASKET COMBO!`);
+        const collectedTotal = game.collectionCounts.reduce((sum, count) => sum + count, 0); if (collectedTotal >= 25) unlockAchievement("basket-25"); if (game.collectionCounts.every((count) => count > 0)) unlockAchievement("every-basket");
       };
 
       for (const platform of game.platforms) {
         if (game.isFalling) break;
-        if (platform.drift) { platform.x += platform.drift * dt; if (platform.x < 8 || platform.x + platform.w > width - 8) platform.drift *= -1; }
+        if (platform.drift) { platform.x += platform.drift * dt * worldSpeed; if (platform.x < 8 || platform.x + platform.w > width - 8) platform.drift *= -1; }
         if (platform.basket != null && !platform.collected) {
           const labelX = clamp(platform.x + platform.w / 2 - 54, 5, width - 113);
           const touchesGoodie = player.x + player.w > labelX && player.x < labelX + 108 && player.y + player.h > platform.y - 57 && player.y < platform.y - 7;
-          if (touchesGoodie) collectBasket(platform);
+          const magnetCollect = time < game.magnetUntil && Math.hypot(player.x + player.w / 2 - (platform.x + platform.w / 2), player.y + player.h / 2 - (platform.y - 28)) < 145;
+          if (touchesGoodie || magnetCollect) collectBasket(platform);
         }
         if (platform.broken) { platform.y += 5.4 * dt; continue; }
         const newBottom = player.y + player.h;
         if (player.vy > 0 && previousBottom <= platform.y + 4 && newBottom >= platform.y && player.x + player.w > platform.x && player.x < platform.x + platform.w) {
           player.y = platform.y - player.h;
-          if (platform.powerUp === "drone" && !platform.powerUsed) { player.vy = -23; game.droneUntil = time + 1100; platform.powerUsed = true; playSfx("rocket"); }
+          if (platform.powerUp === "drone" && !platform.powerUsed) { player.vy = -23; game.droneUntil = time + 1100; platform.powerUsed = true; playSfx("rocket"); updateMission("drones"); updateMission("gadgets"); unlockAchievement("first-drone"); celebrate("DRONE BOOST!"); }
           else {
-            if (platform.powerUp === "boots" && !platform.powerUsed) { game.bootsJumpsRemaining = 5; platform.powerUsed = true; }
-            if (game.bootsJumpsRemaining > 0) {
+            let usedDoor = false;
+            if (platform.powerUp && !platform.powerUsed) {
+              platform.powerUsed = true; updateMission("gadgets");
+              if (platform.powerUp === "boots") { game.bootsJumpsRemaining = 5; celebrate("SPRING BOOTS · 5 JUMPS"); }
+              if (platform.powerUp === "magnet") { game.magnetUntil = time + 8000; celebrate("BASKET MAGNET · 8 SECONDS"); playSfx("collect"); }
+              if (platform.powerUp === "shield") { game.shieldCharges = 1; celebrate("UMBRELLA SHIELD READY"); playSfx("level"); }
+              if (platform.powerUp === "slow") { game.slowUntil = time + 7000; celebrate("TIME BELL · WORLD SLOWED"); playSfx("level"); }
+              if (platform.powerUp === "cloud") { game.cloudCharges = 1; celebrate("CLOUD RESCUE READY"); playSfx("level"); }
+              if (platform.powerUp === "door") {
+                const choices = WORLDS.map((_, index) => index).filter((index) => index !== game.worldIndex); const nextWorld = choices[Math.floor(Math.random() * choices.length)]; game.worldIndex = nextWorld; game.worldStage += 1; setWorldIndex(nextWorld); setWorldToast(true); window.setTimeout(() => setWorldToast(false), 1400); player.vy = -20; usedDoor = true; updateMission("worlds"); if (game.worldStage >= 5) unlockAchievement("five-worlds"); celebrate("ANYWHERE DOOR · NEW WORLD"); playSfx("level");
+              }
+            }
+            if (usedDoor) { /* The door supplies this jump. */ }
+            else if (game.bootsJumpsRemaining > 0) {
               player.vy = -16.3; game.bootsJumpsRemaining -= 1; playSfx("spring");
               if (game.bootsJumpsRemaining === 0) game.fallingBoots.push({ x: player.x + player.w / 2, y: player.y + player.h - 4, vy: 1.8, spin: 0, life: 95 });
             } else { player.vy = -11.5; playSfx("jump"); }
@@ -469,7 +546,8 @@ export default function MonsoonGame() {
         const visibleBoards = game.platforms.filter((platform) => !platform.broken && platform.y + platform.h >= 0 && platform.y <= height);
         const lowestVisibleBoard = visibleBoards.reduce<Platform | null>((lowest, platform) => !lowest || platform.y > lowest.y ? platform : lowest, null);
         const fellBelowLastBoard = lowestVisibleBoard ? player.y > lowestVisibleBoard.y + lowestVisibleBoard.h + 18 : player.y > height + 24;
-        if (fellBelowLastBoard) beginFall();
+        if (fellBelowLastBoard && game.cloudCharges > 0) { game.cloudCharges -= 1; const rescueY = Math.min(height - 70, player.y + player.h + 12); game.platforms.push({ x: clamp(player.x - 34, 8, width - 96), y: rescueY, w: 96, h: 13, basket: null, collected: true, drift: 0, kind: "normal", broken: false, powerUp: null, powerUsed: true }); player.y = rescueY - player.h; player.vy = -12.5; celebrate("CLOUD RESCUE!"); playSfx("level"); }
+        else if (fellBelowLastBoard) beginFall();
       }
 
       if (!game.isFalling && player.y < height * 0.4 && player.vy < 0) {
@@ -478,6 +556,8 @@ export default function MonsoonGame() {
         for (const boots of game.fallingBoots) boots.y += shift;
         game.score = Math.max(game.score, Math.floor(game.distance * 2)); setScore(game.score);
       }
+      const missedGoodie = game.platforms.some((platform) => platform.y >= height + 40 && platform.basket != null && !platform.collected);
+      if (missedGoodie && game.combo > 0) { game.combo = 0; setCombo(0); }
       game.platforms = game.platforms.filter((platform) => platform.y < height + 40);
       while (!game.isFalling && Math.min(...game.platforms.map((platform) => platform.y)) > -160) {
         const top = Math.min(...game.platforms.map((platform) => platform.y));
@@ -494,24 +574,38 @@ export default function MonsoonGame() {
       }
 
       if (!game.isFalling && game.score >= SCORE_GATES.villains) {
+        if (game.score >= game.nextBossScore && !game.villains.some((villain) => villain.alive && villain.boss)) {
+          const fromLeft = game.villainCursor % 2 === 0; const baseY = 210 + Math.random() * Math.max(100, height * .28);
+          game.villains.push({ id: game.villainCursor, x: fromLeft ? -96 : width + 12, y: baseY, baseY, w: 82, h: 70, vx: (fromLeft ? 1 : -1) * .48, phase: Math.random() * Math.PI * 2, alive: true, boss: true, health: 3, maxHealth: 3 });
+          game.villainCursor += 1; game.nextBossScore += 50000; celebrate("BOSS INCOMING · 3 HITS!"); playSfx("level");
+        }
         if (time >= game.nextVillainAt && game.villains.filter((villain) => villain.alive).length < 2) {
           const fromLeft = game.villainCursor % 2 === 0;
           const baseY = 185 + Math.random() * Math.max(130, height * .42);
-          game.villains.push({ id: game.villainCursor, x: fromLeft ? -58 : width + 8, y: baseY, baseY, w: 48, h: 42, vx: (fromLeft ? 1 : -1) * (.72 + Math.random() * .35), phase: Math.random() * Math.PI * 2, alive: true });
+          game.villains.push({ id: game.villainCursor, x: fromLeft ? -58 : width + 8, y: baseY, baseY, w: 48, h: 42, vx: (fromLeft ? 1 : -1) * (.72 + Math.random() * .35), phase: Math.random() * Math.PI * 2, alive: true, boss: false, health: 1, maxHealth: 1 });
           game.villainCursor += 1; game.nextVillainAt = time + 4200 + Math.random() * 2400;
         }
-        for (const villain of game.villains) { villain.x += villain.vx * dt; villain.y = villain.baseY + Math.sin(time / 480 + villain.phase) * 17; }
-        game.villains = game.villains.filter((villain) => villain.alive && villain.x > -90 && villain.x < width + 90);
+        for (const villain of game.villains) { villain.x += villain.vx * dt * worldSpeed; villain.y = villain.baseY + Math.sin(time / (villain.boss ? 620 : 480) + villain.phase) * (villain.boss ? 12 : 17); }
+        game.villains = game.villains.filter((villain) => villain.alive && villain.x > -130 && villain.x < width + 130);
         for (const fireball of game.fireballs) {
           const target = game.villains.find((villain) => villain.id === fireball.targetId && villain.alive);
           if (!target) { fireball.life = 0; continue; }
           const dx = target.x + target.w / 2 - fireball.x; const dy = target.y + target.h / 2 - fireball.y; const distance = Math.hypot(dx, dy);
           fireball.vx = dx / Math.max(distance, 1) * 11; fireball.vy = dy / Math.max(distance, 1) * 11;
           fireball.x += fireball.vx * dt; fireball.y += fireball.vy * dt; fireball.life -= dt;
-          if (distance < 24) { target.alive = false; fireball.life = 0; game.villainsDefeated += 1; game.score += 250; setVillainsDefeated(game.villainsDefeated); setScore(game.score); }
+          if (distance < (target.boss ? 36 : 24)) {
+            target.health -= 1; fireball.life = 0;
+            if (target.health <= 0) {
+              target.alive = false; game.villainsDefeated += 1; game.score += target.boss ? 2000 : 250;
+              if (target.boss) { game.runs += 50; game.shieldCharges = 1; setRuns(game.runs); celebrate("BOSS DEFEATED · +50 RUNS · SHIELD!"); playSfx("level"); }
+              setVillainsDefeated(game.villainsDefeated); setScore(game.score); updateMission("villains"); updateMission("score", game.score, true); if (game.villainsDefeated >= 5) unlockAchievement("villain-hunter");
+            } else celebrate(`BOSS HIT · ${target.health} LEFT`);
+          }
         }
         game.fireballs = game.fireballs.filter((fireball) => fireball.life > 0);
-        if (game.villains.some((villain) => villain.alive && player.x + player.w > villain.x + 5 && player.x < villain.x + villain.w - 5 && player.y + player.h > villain.y + 5 && player.y < villain.y + villain.h - 5)) beginFall();
+        const collision = game.villains.find((villain) => villain.alive && player.x + player.w > villain.x + 5 && player.x < villain.x + villain.w - 5 && player.y + player.h > villain.y + 5 && player.y < villain.y + villain.h - 5);
+        if (collision && game.shieldCharges > 0) { game.shieldCharges -= 1; if (collision.boss) { collision.x += collision.vx > 0 ? -90 : 90; collision.baseY -= 90; } else collision.alive = false; player.vy = -12; celebrate("SHIELD SAVED YOU!"); playSfx("break"); }
+        else if (collision) beginFall();
       }
 
       const targetWorldStage = Math.floor(game.score / SCORE_GATES.worldChange);
@@ -520,7 +614,9 @@ export default function MonsoonGame() {
         const choices = WORLDS.map((_, index) => index).filter((index) => index !== game.worldIndex);
         const nextWorld = choices[Math.floor(Math.random() * choices.length)];
         game.worldIndex = nextWorld; setWorldIndex(nextWorld); setWorldToast(true); playSfx("level"); window.setTimeout(() => setWorldToast(false), 1400);
+        updateMission("worlds"); if (game.worldStage >= 5) unlockAchievement("five-worlds");
       }
+      updateMission("score", game.score, true); if (game.score >= 100000) unlockAchievement("score-100k");
 
       const candidate = game.platforms.filter((platform) => platform.basket != null && !platform.collected && !platform.broken).sort((a, b) => Math.abs(a.y - player.y) - Math.abs(b.y - player.y))[0];
       if (candidate?.basket != null && candidate.basket !== game.nearbyBasket) { game.nearbyBasket = candidate.basket; setNearbyBasket(candidate.basket); }
@@ -548,6 +644,7 @@ export default function MonsoonGame() {
           for (const [rx, ry] of rotors) { context.beginPath(); context.moveTo(rx * .38, ry * .38); context.lineTo(rx, ry); context.stroke(); context.fillStyle = "rgba(223,252,255,.88)"; context.beginPath(); context.ellipse(rx, ry, 10 + Math.sin(time / 55 + rx) * 2, 2.5, 0, 0, Math.PI * 2); context.fill(); }
           context.fillStyle = "#253d5b"; context.beginPath(); context.roundRect(-14, -8, 28, 16, 6); context.fill(); context.strokeStyle = "#ffe17c"; context.stroke(); context.fillStyle = "#0cd8ba"; context.beginPath(); context.arc(0, 0, 3.5, 0, Math.PI * 2); context.fill(); context.restore();
         }
+        if (platform.powerUp && !platform.powerUsed && GADGET_ICONS[platform.powerUp]) { context.font = "25px system-ui"; context.textAlign = "center"; context.fillText(GADGET_ICONS[platform.powerUp]!, platform.x + platform.w / 2, platform.y - 8); }
         if (platform.basket != null && !platform.collected) {
           const basket = BASKETS[platform.basket]; const cx = platform.x + platform.w / 2;
           const labelX = clamp(cx - 54, 5, width - 113);
@@ -574,7 +671,7 @@ export default function MonsoonGame() {
       }
       for (const villain of game.villains) {
         if (!villain.alive) continue;
-        context.save(); context.translate(villain.x + villain.w / 2, villain.y + villain.h / 2);
+        context.save(); context.translate(villain.x + villain.w / 2, villain.y + villain.h / 2); if (villain.boss) context.scale(1.55, 1.55);
         const wing = 9 + Math.sin(time / 85 + villain.phase) * 5;
         context.fillStyle = "rgba(55,12,75,.9)"; context.strokeStyle = "#ff365d"; context.lineWidth = 2;
         for (const side of [-1, 1]) { context.beginPath(); context.moveTo(side * 17, -7); context.lineTo(side * 36, -wing); context.lineTo(side * 29, 0); context.lineTo(side * 38, wing); context.lineTo(side * 16, 11); context.closePath(); context.fill(); context.stroke(); }
@@ -582,12 +679,19 @@ export default function MonsoonGame() {
         context.fillStyle = "#d51d42"; context.beginPath(); context.moveTo(-17, -15); context.lineTo(-12, -31); context.lineTo(-4, -18); context.moveTo(4, -18); context.lineTo(12, -31); context.lineTo(17, -15); context.fill();
         context.fillStyle = "#fff"; context.beginPath(); context.moveTo(-16, -7); context.lineTo(-3, -3); context.lineTo(-15, 2); context.closePath(); context.moveTo(16, -7); context.lineTo(3, -3); context.lineTo(15, 2); context.closePath(); context.fill();
         context.fillStyle = "#ff163f"; context.beginPath(); context.arc(-9, -3, 2.7, 0, Math.PI * 2); context.arc(9, -3, 2.7, 0, Math.PI * 2); context.fill();
-        context.fillStyle = "#fff"; context.beginPath(); context.moveTo(-10, 8); context.lineTo(-4, 16); context.lineTo(0, 8); context.lineTo(5, 16); context.lineTo(11, 8); context.closePath(); context.fill(); context.restore();
+        context.fillStyle = "#fff"; context.beginPath(); context.moveTo(-10, 8); context.lineTo(-4, 16); context.lineTo(0, 8); context.lineTo(5, 16); context.lineTo(11, 8); context.closePath(); context.fill();
+        if (villain.boss) { context.fillStyle = "rgba(5,10,24,.86)"; context.beginPath(); context.roundRect(-23, 24, 46, 6, 3); context.fill(); context.fillStyle = "#ff365d"; context.beginPath(); context.roundRect(-22, 25, 44 * (villain.health / villain.maxHealth), 4, 2); context.fill(); }
+        context.restore();
       }
 
       const px = player.x, py = player.y;
       context.save(); context.translate(px + player.w / 2, py + player.h / 2); context.rotate(game.isFalling ? (time - game.fallStarted) / 240 : clamp(player.vx / 34, -.17, .17)); if (player.vx < 0) context.scale(-1, 1);
-      const upgradeTier = Math.min(game.worldStage, 5); const outfitColors = ["#0cd8ba", "#ff9f1c", "#9b5de5", "#ef476f", "#00bbf9", "#ffe17c"]; const outfitColor = outfitColors[game.worldStage % outfitColors.length];
+      const upgradeTier = Math.min(game.worldStage, 5);
+      const outfitColors = ["#0cd8ba", "#ff9f1c", "#9b5de5", "#ef476f", "#00bbf9", "#ffe17c"];
+      const doremonColors = ["#169fe3", "#7657e8", "#10bfa5", "#ef476f", "#f2a51a", "#37b45b", "#e456b4", "#465ce8"];
+      const outfitColor = outfitColors[game.worldStage % outfitColors.length];
+      const doremonColor = doremonColors[game.worldStage % doremonColors.length];
+      if (time < game.magnetUntil) { context.strokeStyle = "rgba(12,216,186,.5)"; context.lineWidth = 2; context.beginPath(); context.arc(0, 0, 39 + Math.sin(time / 120) * 4, 0, Math.PI * 2); context.stroke(); }
       if (upgradeTier >= 2) { context.fillStyle = `${outfitColor}bb`; context.beginPath(); context.moveTo(-16, 3); context.quadraticCurveTo(-31, 18, -23, 37); context.lineTo(-2, 19); context.closePath(); context.fill(); }
       if (droning) {
         context.strokeStyle = "#dffcff"; context.lineWidth = 2.4; const rotors = [[-34, -13], [-31, 11], [31, 11], [34, -13]];
@@ -596,13 +700,27 @@ export default function MonsoonGame() {
       }
       const moving = Math.abs(player.vx) > 1.05;
       const sprite = game.isFalling ? (Math.floor(time / 105) % 2 === 0 ? runSpriteRef.current : spriteRef.current) : moving ? runSpriteRef.current : spriteRef.current;
-      if (sprite?.complete && sprite.naturalWidth > 0) context.drawImage(sprite, -33, -38, 66, 66);
+      if (sprite?.complete && sprite.naturalWidth > 0) {
+        if (game.worldStage === 0) context.drawImage(sprite, -33, -38, 66, 66);
+        else {
+          if (!tintedSpriteCanvasRef.current) { tintedSpriteCanvasRef.current = document.createElement("canvas"); tintedSpriteCanvasRef.current.width = 66; tintedSpriteCanvasRef.current.height = 66; }
+          const tintCanvas = tintedSpriteCanvasRef.current; const tintContext = tintCanvas.getContext("2d");
+          if (tintContext) {
+            tintContext.clearRect(0, 0, 66, 66); tintContext.globalCompositeOperation = "source-over"; tintContext.globalAlpha = 1; tintContext.drawImage(sprite, 0, 0, 66, 66);
+            tintContext.globalCompositeOperation = "color"; tintContext.fillStyle = doremonColor; tintContext.fillRect(0, 0, 66, 66);
+            tintContext.globalCompositeOperation = "destination-in"; tintContext.drawImage(sprite, 0, 0, 66, 66); tintContext.globalCompositeOperation = "source-over";
+            context.drawImage(tintCanvas, -33, -38, 66, 66);
+          } else context.drawImage(sprite, -33, -38, 66, 66);
+        }
+      }
       else { context.fillStyle = "#169fe3"; context.beginPath(); context.arc(0, 0, 20, 0, Math.PI * 2); context.fill(); }
       if (upgradeTier >= 1) { context.fillStyle = outfitColor; context.beginPath(); context.roundRect(-14, 5, 28, 13, 6); context.fill(); context.fillStyle = "rgba(255,255,255,.75)"; context.beginPath(); context.arc(0, 11, 3, 0, Math.PI * 2); context.fill(); }
       if (wearingSpringBoots) { for (const side of [-1, 1]) { const bx = side * 11; context.strokeStyle = "#dffcff"; context.lineWidth = 2; context.beginPath(); context.moveTo(bx - 4, 22); context.lineTo(bx + 4, 26); context.lineTo(bx - 4, 30); context.lineTo(bx + 4, 34); context.stroke(); context.fillStyle = "#0cd8ba"; context.beginPath(); context.roundRect(bx - 8, 31, 18, 8, 3); context.fill(); } }
       if (upgradeTier >= 3) { context.fillStyle = "#ffe17c"; context.strokeStyle = "#9d6616"; context.lineWidth = 1.5; context.beginPath(); context.moveTo(-15, -29); context.lineTo(-11, -43); context.lineTo(-3, -33); context.lineTo(3, -45); context.lineTo(10, -33); context.lineTo(16, -43); context.lineTo(15, -27); context.closePath(); context.fill(); context.stroke(); }
       if (upgradeTier >= 4) { context.strokeStyle = "#ffe17c"; context.lineWidth = 3; context.beginPath(); context.moveTo(18, 8); context.lineTo(35, -15); context.stroke(); context.fillStyle = outfitColor; context.beginPath(); for (let i = 0; i < 10; i += 1) { const radius = i % 2 === 0 ? 8 : 3.5; const angle = -Math.PI / 2 + i * Math.PI / 5; const sx = 36 + Math.cos(angle) * radius; const sy = -18 + Math.sin(angle) * radius; if (i === 0) context.moveTo(sx, sy); else context.lineTo(sx, sy); } context.closePath(); context.fill(); }
       if (upgradeTier >= 5) { context.fillStyle = "#fff7a8"; for (let i = 0; i < 5; i += 1) { const angle = time / 430 + i * Math.PI * .4; context.beginPath(); context.arc(Math.cos(angle) * 43, Math.sin(angle) * 35, 2.2, 0, Math.PI * 2); context.fill(); } }
+      if (game.shieldCharges > 0) { context.strokeStyle = "rgba(223,252,255,.9)"; context.lineWidth = 3; context.beginPath(); context.arc(0, -2, 38, Math.PI, Math.PI * 2); context.stroke(); context.beginPath(); context.moveTo(0, -40); context.lineTo(0, 24); context.quadraticCurveTo(0, 31, 7, 27); context.stroke(); }
+      if (game.cloudCharges > 0) { context.fillStyle = "rgba(255,255,255,.86)"; context.beginPath(); context.arc(-24, 31, 7, 0, Math.PI * 2); context.arc(-15, 28, 9, 0, Math.PI * 2); context.arc(-7, 32, 6, 0, Math.PI * 2); context.fill(); }
       context.restore();
 
       if (game.isFalling && time - game.fallStarted > 1650) {
@@ -617,7 +735,7 @@ export default function MonsoonGame() {
     };
     frameRef.current = requestAnimationFrame(draw);
     return () => { observer.disconnect(); window.removeEventListener("keydown", keyDown); window.removeEventListener("keyup", keyUp); if (frameRef.current) cancelAnimationFrame(frameRef.current); };
-  }, [screen, best, playSfx, submitResult]);
+  }, [screen, best, playSfx, submitResult, celebrate, updateMission, unlockAchievement]);
 
   const pointerMove = (event: ReactPointerEvent<HTMLCanvasElement>) => {
     const rect = event.currentTarget.getBoundingClientRect(); gameRef.current.pointerX = event.clientX - rect.left;
@@ -685,7 +803,8 @@ export default function MonsoonGame() {
           <label><span>Mobile number</span><div className="phone-field"><b>+91</b><input name="mobile" inputMode="numeric" autoComplete="tel" maxLength={10} value={mobile} onChange={(event) => setMobile(event.target.value.replace(/\D/g, ""))} placeholder="10-digit number" /></div></label>
           <label><span>Branch</span><input name="branch" autoComplete="organization" value={branch} onChange={(event) => setBranch(event.target.value)} placeholder="Enter your branch name or code" /></label>
           {formError && <p className="form-error" role="alert">⚠ {formError}</p>}
-          <button className="play-button" disabled={submitting}>{submitting ? "Preparing your run…" : "START GAME  ▶"}</button>
+          {calibrationMessage && <p className="calibration-note" role="status">📱 {calibrationMessage}</p>}
+          <button className="play-button" disabled={submitting}>{submitting ? "CALIBRATING…" : "START GAME  ▶"}</button>
           <p className="privacy-note">By starting, you agree that the contest team may use these details to record and contact you about your participation.</p>
         </form>
         <button className="text-button" onClick={() => { setFormError(""); setScreen("intro"); }}>← Back to contest details</button>
@@ -702,11 +821,15 @@ export default function MonsoonGame() {
           <div className={`world-chip ${worldToast ? "is-new" : ""}`}>{WORLDS[worldIndex].icon} {WORLDS[worldIndex].name}</div>
           <button className="sound-toggle" aria-label={muted ? "Turn sound on" : "Mute sound"} onClick={() => { const next = !muted; mutedRef.current = next; setMuted(next); if (next && "speechSynthesis" in window) window.speechSynthesis.cancel(); if (!next) playSfx("click"); }}>{muted ? "🔇" : "🔊"}</button>
           <div className="nearby-goodie" title={BASKETS[nearbyBasket].name}><span>NEXT</span><strong>{BASKETS[nearbyBasket].short}</strong><b>+{BASKETS[nearbyBasket].runs} Runs</b></div>
+          <button className="mission-toggle" aria-expanded={showMissions} onClick={() => setShowMissions((current) => !current)}>MISSIONS <b>{missions.filter((mission) => mission.complete).length}/3</b></button>
+          {showMissions && <div className="mission-panel" role="status">{missions.map((mission) => <div className={mission.complete ? "is-complete" : ""} key={mission.id}><span>{mission.complete ? "✓" : "○"}</span><p><strong>{mission.label}</strong><b>{Math.min(mission.progress, mission.target).toLocaleString("en-IN")} / {mission.target.toLocaleString("en-IN")}</b></p></div>)}</div>}
+          {combo > 1 && <div className="combo-chip">🔥 {combo}× COMBO</div>}
           {score >= SCORE_GATES.villains && <div className="shoot-tip">🔥 TAP A VILLAIN TO SHOOT <b>{villainsDefeated} defeated</b></div>}
         </>}
+        {celebration && <div className="celebration-toast" role="status">{celebration}</div>}
         {showTiltGuide && !falling && <div className="tilt-guide" role="status"><span className="tilt-phone" aria-hidden="true">📱</span><div><strong>TILT TO MOVE DOREMON</strong><p>Move your phone left or right</p></div></div>}
         <canvas ref={canvasRef} tabIndex={0} aria-label="Jumping game. Tilt your phone, drag, or use arrow keys to move. After 30,000 points, tap flying villains to shoot." onPointerDown={(event) => { setShowTiltGuide(false); if (shootAtVillain(event)) return; event.currentTarget.setPointerCapture(event.pointerId); pointerMove(event); }} onPointerMove={(event) => { if (event.buttons) pointerMove(event); }} onPointerUp={() => { gameRef.current.pointerX = null; gameRef.current.input = 0; }} />
-        {toast && <div className="basket-toast" role="status"><i>{toast.icon}</i><div className="toast-copy"><span>GOODIE COLLECTED</span><strong>{toast.name}</strong><b>+{toast.runs} Runs</b><dl><div><dt>SUBSCRIPTION FEE</dt><dd>{toast.fee} / year</dd></div></dl></div></div>}
+        {toast && <div className="basket-toast" role="status"><i>{toast.basket.icon}</i><div className="toast-copy"><span>GOODIE COLLECTED · {toast.multiplier}× COMBO</span><strong>{toast.basket.name}</strong><b>+{toast.awarded} Runs</b><dl><div><dt>SUBSCRIPTION FEE</dt><dd>{toast.basket.fee} / year</dd></div></dl></div></div>}
       </section>}
 
       {screen === "gameover" && <section className="gameover-panel">
@@ -715,6 +838,8 @@ export default function MonsoonGame() {
         <p className="gameover-copy">{runs >= 900 ? "You cleared every slab. Each additional 50 Runs now unlocks another 5,000 points." : nextSlab ? `${nextSlab.runs - runs} more Runs to reach the next reward slab.` : "Keep climbing to unlock more campaign rewards."}</p>
         <p className={`result-status is-${resultStatus}`} role="status">{resultStatus === "sending" ? "Saving your score…" : resultStatus === "sent" ? "✓ Score recorded successfully" : resultStatus === "local" ? "Score saved on this device (form endpoint not connected)." : resultStatus === "error" ? "Score saved on this device; online submission could not be completed." : ""}</p>
         <button className="play-button" onClick={() => { playSfx("click"); resetGame(); setScreen("playing"); }}>PLAY AGAIN  ↻</button>
+        <section className="mission-results" aria-label="Mission results"><div><span>BEST COMBO</span><strong>{bestCombo || 1}×</strong></div><div><span>MISSIONS</span><strong>{missions.filter((mission) => mission.complete).length} / 3</strong></div></section>
+        <section className="achievement-collection" aria-label="Achievement collection"><h2>ACHIEVEMENTS</h2><div>{ACHIEVEMENTS.map((achievement) => <article className={achievements.includes(achievement.id) ? "is-unlocked" : ""} key={achievement.id}><i>{achievements.includes(achievement.id) ? achievement.icon : "?"}</i><span>{achievement.label}</span></article>)}</div></section>
         <section className="run-ledger" aria-label="Collected basket summary">
           <div className="ledger-heading"><div><span>RUN SUMMARY</span><strong>{WORLDS[worldIndex].icon} {WORLDS[worldIndex].name} reached</strong></div><b>{totalGoodies} collected</b></div>
           {totalGoodies === 0 ? <p className="empty-ledger">No basket goodies collected this run. Try steering toward the labelled boards.</p> : <div className="ledger-list">

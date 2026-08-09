@@ -37,10 +37,12 @@ test("includes progression, mission, gadget and result systems", async () => {
 
   assert.match(game, /nextBossScore:\s*50000/);
   assert.match(game, /BASKET MAGNET/);
-  assert.match(game, /CLOUD RESCUE/);
+  assert.match(game, /RESCUE CLOUD/);
   assert.match(game, /BOSS INCOMING/);
   assert.match(game, /doremon-jump-achievements/);
   assert.match(game, /const doremonColors/);
+  assert.match(game, /lastHudUpdate/);
+  assert.doesNotMatch(game, /shieldCharges|powerUp === "shield"/);
   assert.match(game, /Tilt calibrated/);
   assert.match(styles, /\.mission-panel/);
   assert.match(styles, /\.celebration-toast/);

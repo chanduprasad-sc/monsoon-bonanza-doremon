@@ -150,12 +150,13 @@ export default function MonsoonGame() {
   const orientationHandlerRef = useRef<((event: DeviceOrientationEvent) => void) | null>(null);
   const celebrationTimerRef = useRef<number | null>(null);
   const basketToastTimerRef = useRef<number | null>(null);
+  const worldToastTimerRef = useRef<number | null>(null);
   const gameRef = useRef({
     player: { x: 180, y: 500, vx: 0, vy: -10, w: 34, h: 44 },
     platforms: [] as Platform[], input: 0, pointerX: null as number | null,
     score: 0, runs: 0, distance: 0, basketCursor: 0, lastTime: 0, width: 390, height: 700,
     collectionCounts: Array(BASKETS.length).fill(0) as number[], droneUntil: 0, bootsJumpsRemaining: 0, fallingBoots: [] as FallingBoots[], magnetUntil: 0, slowUntil: 0, cloudCharges: 0, lastHudUpdate: 0, lastMissionScore: -250,
-    combo: 0, bestCombo: 0, missions: [] as Mission[], achievements: [] as string[], worldIndex: 0, worldStage: 0, nextWorldChangeAt: 0, nearbyBasket: -1, isFalling: false, fallStarted: 0, resultSubmitted: false,
+    combo: 0, bestCombo: 0, missions: [] as Mission[], achievements: [] as string[], worldIndex: 0, worldStage: 0, nearbyBasket: -1, isFalling: false, fallStarted: 0, resultSubmitted: false,
     villains: [] as Villain[], fireballs: [] as Fireball[], nextVillainAt: 0, nextBossScore: 50000, villainCursor: 0, villainsDefeated: 0,
   });
   const [screen, setScreen] = useState<Screen>("intro");
@@ -215,7 +216,7 @@ export default function MonsoonGame() {
     const markInstalled = () => { setIsInstalled(true); setInstallPrompt(null); setInstallNote("Installed — open Doremon Jump from your home screen."); };
     window.addEventListener("beforeinstallprompt", captureInstall);
     window.addEventListener("appinstalled", markInstalled);
-    return () => { window.clearTimeout(hydrateTimer); window.removeEventListener("beforeinstallprompt", captureInstall); window.removeEventListener("appinstalled", markInstalled); if (orientationHandlerRef.current) window.removeEventListener("deviceorientation", orientationHandlerRef.current); if (celebrationTimerRef.current) window.clearTimeout(celebrationTimerRef.current); if (basketToastTimerRef.current) window.clearTimeout(basketToastTimerRef.current); };
+    return () => { window.clearTimeout(hydrateTimer); window.removeEventListener("beforeinstallprompt", captureInstall); window.removeEventListener("appinstalled", markInstalled); if (orientationHandlerRef.current) window.removeEventListener("deviceorientation", orientationHandlerRef.current); if (celebrationTimerRef.current) window.clearTimeout(celebrationTimerRef.current); if (basketToastTimerRef.current) window.clearTimeout(basketToastTimerRef.current); if (worldToastTimerRef.current) window.clearTimeout(worldToastTimerRef.current); };
   }, []);
 
   const installApp = async () => {
@@ -320,7 +321,7 @@ export default function MonsoonGame() {
     game.input = 0; game.pointerX = null; game.score = 0; game.runs = 0; game.distance = 0; game.basketCursor = 4; game.lastTime = 0;
     const firstWorld = Math.floor(Math.random() * WORLDS.length);
     const runMissions = createMissions();
-    game.collectionCounts = Array(BASKETS.length).fill(0); game.droneUntil = 0; game.bootsJumpsRemaining = 0; game.fallingBoots = []; game.magnetUntil = 0; game.slowUntil = 0; game.cloudCharges = 0; game.lastHudUpdate = 0; game.lastMissionScore = -250; game.combo = 0; game.bestCombo = 0; game.missions = runMissions; game.worldIndex = firstWorld; game.worldStage = 0; game.nextWorldChangeAt = 0; game.nearbyBasket = 1; game.isFalling = false; game.fallStarted = 0; game.resultSubmitted = false;
+    game.collectionCounts = Array(BASKETS.length).fill(0); game.droneUntil = 0; game.bootsJumpsRemaining = 0; game.fallingBoots = []; game.magnetUntil = 0; game.slowUntil = 0; game.cloudCharges = 0; game.lastHudUpdate = 0; game.lastMissionScore = -250; game.combo = 0; game.bestCombo = 0; game.missions = runMissions; game.worldIndex = firstWorld; game.worldStage = 0; game.nearbyBasket = 1; game.isFalling = false; game.fallStarted = 0; game.resultSubmitted = false;
     game.villains = []; game.fireballs = []; game.nextVillainAt = 0; game.nextBossScore = 50000; game.villainCursor = 0; game.villainsDefeated = 0;
     setScore(0); setRuns(0); setToast(null); setCollectionCounts(Array(BASKETS.length).fill(0)); setWorldIndex(firstWorld); setWorldToast(false); setNearbyBasket(1); setFalling(false); setVillainsDefeated(0); setResultStatus("idle"); setShowTiltGuide(true); setCombo(0); setBestCombo(0); setMissions(runMissions); setShowMissions(false);
     window.setTimeout(() => setShowMissions(true), 4700);
@@ -434,6 +435,12 @@ export default function MonsoonGame() {
     };
     window.addEventListener("keydown", keyDown); window.addEventListener("keyup", keyUp);
 
+    const pulseWorldChip = () => {
+      setWorldToast(false);
+      if (worldToastTimerRef.current) window.clearTimeout(worldToastTimerRef.current);
+      window.requestAnimationFrame(() => { setWorldToast(true); worldToastTimerRef.current = window.setTimeout(() => setWorldToast(false), 1400); });
+    };
+
     let cachedWorld = -1; let cachedWorldHeight = 0; let cachedBackground: CanvasGradient | null = null;
     let cachedPlanetWidth = 0; let cachedPlanet: CanvasGradient | null = null;
     const drawWorld = (world: number, time: number, width: number, height: number) => {
@@ -505,7 +512,6 @@ export default function MonsoonGame() {
         platform.collected = true;
         const basket = BASKETS[platform.basket]; const multiplier = game.combo + 1; game.bestCombo = Math.max(game.bestCombo, multiplier); const awardedRuns = basket.runs * multiplier; game.runs += awardedRuns; game.score += awardedRuns * 10; game.combo = multiplier === 5 ? 0 : multiplier;
         game.collectionCounts[platform.basket] += 1;
-        game.nextWorldChangeAt = Math.max(game.nextWorldChangeAt, time + 1900);
         setScore(game.score); setRuns(game.runs); setCombo(game.combo); setBestCombo(game.bestCombo); setCollectionCounts([...game.collectionCounts]); setToast({ basket, awarded: awardedRuns, multiplier }); playSfx("collect"); if (basketToastTimerRef.current) window.clearTimeout(basketToastTimerRef.current); basketToastTimerRef.current = window.setTimeout(() => setToast(null), 1800);
         updateMission("baskets"); updateMission("combo", game.bestCombo, true); updateMission("score", game.score, true);
         const collectedTotal = game.collectionCounts.reduce((sum, count) => sum + count, 0); if (collectedTotal >= 25) unlockAchievement("basket-25"); if (game.collectionCounts.every((count) => count > 0)) unlockAchievement("every-basket");
@@ -542,7 +548,7 @@ export default function MonsoonGame() {
               if (platform.powerUp === "slow") { game.slowUntil = time + 7000; celebrate("TIME BELL · WORLD SLOWED"); playSfx("level"); }
               if (platform.powerUp === "cloud") { game.cloudCharges = 1; celebrate("RESCUE CLOUD · SAVES YOUR NEXT FALL"); playSfx("level"); }
               if (platform.powerUp === "door") {
-                const choices = WORLDS.map((_, index) => index).filter((index) => index !== game.worldIndex); const nextWorld = choices[Math.floor(Math.random() * choices.length)]; game.worldIndex = nextWorld; game.worldStage += 1; setWorldIndex(nextWorld); setWorldToast(true); window.setTimeout(() => setWorldToast(false), 1400); player.vy = -20; usedDoor = true; updateMission("worlds"); if (game.worldStage >= 5) unlockAchievement("five-worlds"); celebrate("ANYWHERE DOOR · NEW WORLD"); playSfx("level");
+                const choices = WORLDS.map((_, index) => index).filter((index) => index !== game.worldIndex); const nextWorld = choices[Math.floor(Math.random() * choices.length)]; game.worldIndex = nextWorld; game.worldStage += 1; setWorldIndex(nextWorld); pulseWorldChip(); player.vy = -20; usedDoor = true; updateMission("worlds"); if (game.worldStage >= 5) unlockAchievement("five-worlds"); celebrate("ANYWHERE DOOR · NEW WORLD"); playSfx("level");
               }
             }
             if (usedDoor) { /* The door supplies this jump. */ }
@@ -622,11 +628,11 @@ export default function MonsoonGame() {
       }
 
       const targetWorldStage = Math.floor(game.score / SCORE_GATES.worldChange);
-      if (!game.isFalling && targetWorldStage > game.worldStage && time >= game.nextWorldChangeAt) {
-        game.worldStage += 1; game.nextWorldChangeAt = time + 1500;
+      if (!game.isFalling && targetWorldStage > game.worldStage) {
+        game.worldStage = targetWorldStage;
         const choices = WORLDS.map((_, index) => index).filter((index) => index !== game.worldIndex);
         const nextWorld = choices[Math.floor(Math.random() * choices.length)];
-        game.worldIndex = nextWorld; setWorldIndex(nextWorld); setWorldToast(true); playSfx("level"); window.setTimeout(() => setWorldToast(false), 1400);
+        game.worldIndex = nextWorld; setWorldIndex(nextWorld); pulseWorldChip(); playSfx("level");
         updateMission("worlds"); if (game.worldStage >= 5) unlockAchievement("five-worlds");
       }
       if (game.score - game.lastMissionScore >= 250) { game.lastMissionScore = Math.floor(game.score / 250) * 250; updateMission("score", game.score, true); }
@@ -717,7 +723,7 @@ export default function MonsoonGame() {
       const outfitColors = ["#0cd8ba", "#ff9f1c", "#9b5de5", "#ef476f", "#00bbf9", "#ffe17c"];
       const doremonColors = ["#169fe3", "#7657e8", "#10bfa5", "#ef476f", "#f2a51a", "#37b45b", "#e456b4", "#465ce8"];
       const outfitColor = outfitColors[game.worldStage % outfitColors.length]; const accessoryMode = game.worldStage % 5;
-      const doremonColor = doremonColors[game.worldStage % doremonColors.length];
+      const colorPhase = game.worldStage % doremonColors.length; const doremonColor = doremonColors[colorPhase];
       if (time < game.magnetUntil) { context.save(); context.strokeStyle = "rgba(255,209,102,.92)"; context.lineWidth = 2.5; context.beginPath(); context.arc(0, 0, 38 + Math.sin(time / 120) * 3, 0, Math.PI * 2); context.stroke(); context.strokeStyle = "rgba(230,57,70,.68)"; context.lineWidth = 1.5; context.beginPath(); context.arc(0, 0, 44 + Math.cos(time / 140) * 3, 0, Math.PI * 2); context.stroke(); for (let i = 0; i < 4; i += 1) { const angle = time / 310 + i * Math.PI / 2; context.fillStyle = i % 2 ? "#ffd166" : "#e63946"; context.beginPath(); context.arc(Math.cos(angle) * 42, Math.sin(angle) * 35, 3, 0, Math.PI * 2); context.fill(); } context.restore(); }
       if (droning) {
         context.save(); context.lineCap = "round"; const rotors = [[-31, -14], [-31, 12], [31, -14], [31, 12]];
@@ -727,7 +733,7 @@ export default function MonsoonGame() {
       const moving = Math.abs(player.vx) > 1.05;
       const sprite = game.isFalling ? (Math.floor(time / 105) % 2 === 0 ? runSpriteRef.current : spriteRef.current) : moving ? runSpriteRef.current : spriteRef.current;
       if (sprite?.complete && sprite.naturalWidth > 0) {
-        if (game.worldStage === 0) context.drawImage(sprite, -33, -38, 66, 66);
+        if (colorPhase === 0) context.drawImage(sprite, -33, -38, 66, 66);
         else {
           const tintKey = `${sprite.src}|${doremonColor}`; let tintCanvas = tintedSpriteCacheRef.current.get(tintKey);
           if (!tintCanvas) {

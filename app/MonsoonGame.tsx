@@ -4,10 +4,13 @@ import { FormEvent, PointerEvent as ReactPointerEvent, useCallback, useEffect, u
 
 type Screen = "intro" | "details" | "playing" | "gameover";
 type Basket = { name: string; fee: string; runs: number; short: string; icon: string };
-type PowerUp = "spring" | "rocket" | null;
+type PowerUp = "boots" | "drone" | "magnet" | "shield" | "slow" | "cloud" | "door" | null;
 type Platform = { x: number; y: number; w: number; h: number; basket: number | null; collected: boolean; drift: number; kind: "normal" | "breakable"; broken: boolean; powerUp: PowerUp; powerUsed: boolean };
-type Villain = { id: number; x: number; y: number; baseY: number; w: number; h: number; vx: number; phase: number; alive: boolean };
+type Villain = { id: number; x: number; y: number; baseY: number; w: number; h: number; vx: number; phase: number; alive: boolean; boss: boolean; health: number; maxHealth: number };
 type Fireball = { x: number; y: number; vx: number; vy: number; targetId: number; life: number };
+type FallingBoots = { x: number; y: number; vy: number; spin: number; life: number };
+type MissionKind = "baskets" | "drones" | "villains" | "combo" | "worlds" | "gadgets" | "score";
+type Mission = { id: MissionKind; label: string; target: number; progress: number; complete: boolean };
 type SoundKind = "click" | "collect" | "jump" | "spring" | "rocket" | "break" | "level" | "start" | "fall" | "shoot";
 type InstallPromptEvent = Event & { prompt: () => Promise<void>; userChoice: Promise<{ outcome: "accepted" | "dismissed" }> };
 
@@ -28,6 +31,25 @@ const SCORE_GATES = {
   worldChange: 10000,
   fullDifficulty: 50000,
 } as const;
+
+const MISSION_POOL: Omit<Mission, "progress" | "complete">[] = [
+  { id: "baskets", label: "Collect 6 baskets", target: 6 },
+  { id: "drones", label: "Use 2 drone boosts", target: 2 },
+  { id: "villains", label: "Defeat 3 villains", target: 3 },
+  { id: "combo", label: "Build a 3× combo", target: 3 },
+  { id: "worlds", label: "Visit 3 new worlds", target: 3 },
+  { id: "gadgets", label: "Use 4 gadgets", target: 4 },
+  { id: "score", label: "Reach 15,000 score", target: 15000 },
+];
+
+const ACHIEVEMENTS = [
+  { id: "first-drone", icon: "✣", label: "First Drone Flight" },
+  { id: "basket-25", icon: "🧺", label: "25 Baskets Collected" },
+  { id: "five-worlds", icon: "🌍", label: "Five Worlds Visited" },
+  { id: "villain-hunter", icon: "🔥", label: "Villain Hunter" },
+  { id: "score-100k", icon: "★", label: "100,000-Point Run" },
+  { id: "every-basket", icon: "◆", label: "Every Basket Collected" },
+] as const;
 
 const BASKETS: Basket[] = [
   { name: "HNI Prime–Growth at a Fair Price Asset Allocation", fee: "₹1,00,000", runs: 200, short: "HNI", icon: "◆" },
@@ -75,7 +97,8 @@ const WORLDS = [
 ];
 
 function platformExtras(index: number, score = 0) {
-  const powerUp: PowerUp = index > 3 && index % 13 === 0 ? "rocket" : index > 2 && index % 8 === 0 ? "spring" : null;
+  const gadgetCycle: Exclude<PowerUp, null>[] = ["boots", "drone", "magnet", "shield", "slow", "cloud", "door"];
+  const powerUp: PowerUp = index > 3 && index % 9 === 0 ? gadgetCycle[Math.floor(index / 9) % gadgetCycle.length] : null;
   const breakFrequency = score < SCORE_GATES.breakableBoards ? 0 : score < SCORE_GATES.villains ? 11 : score < 40000 ? 9 : score < SCORE_GATES.fullDifficulty ? 8 : 7;
   return { kind: breakFrequency && index > 4 && index % breakFrequency === 0 ? "breakable" as const : "normal" as const, broken: false, powerUp, powerUsed: false };
 }
@@ -116,7 +139,7 @@ export default function MonsoonGame() {
     player: { x: 180, y: 500, vx: 0, vy: -10, w: 34, h: 44 },
     platforms: [] as Platform[], input: 0, pointerX: null as number | null,
     score: 0, runs: 0, distance: 0, basketCursor: 0, lastTime: 0, width: 390, height: 700,
-    collectionCounts: Array(BASKETS.length).fill(0) as number[], rocketUntil: 0, worldIndex: 0, worldStage: 0, nextWorldChangeAt: 0, nearbyBasket: -1, isFalling: false, fallStarted: 0, resultSubmitted: false,
+    collectionCounts: Array(BASKETS.length).fill(0) as number[], droneUntil: 0, bootsJumpsRemaining: 0, fallingBoots: [] as FallingBoots[], worldIndex: 0, worldStage: 0, nextWorldChangeAt: 0, nearbyBasket: -1, isFalling: false, fallStarted: 0, resultSubmitted: false,
     villains: [] as Villain[], fireballs: [] as Fireball[], nextVillainAt: 0, villainCursor: 0, villainsDefeated: 0,
   });
   const [screen, setScreen] = useState<Screen>("intro");
@@ -145,6 +168,12 @@ export default function MonsoonGame() {
 
   useEffect(() => {
     setBest(Number(localStorage.getItem("monsoon-bonanza-best") || 0));
+    try {
+      const savedPlayer = JSON.parse(localStorage.getItem("monsoon-bonanza-player") || "null") as { name?: unknown; mobile?: unknown; branch?: unknown } | null;
+      if (savedPlayer && typeof savedPlayer.name === "string" && typeof savedPlayer.mobile === "string" && typeof savedPlayer.branch === "string") {
+        setName(savedPlayer.name); setMobile(savedPlayer.mobile); setBranch(savedPlayer.branch);
+      }
+    } catch { /* Ignore incomplete or manually edited device data. */ }
     const image = new Image(); image.src = "/doraemon-sprite.png"; spriteRef.current = image;
     const runImage = new Image(); runImage.src = "/doraemon-run.png"; runSpriteRef.current = runImage;
     for (const [kind, source] of Object.entries(SOUND_FILES) as [SoundKind, string][]) {
@@ -187,16 +216,20 @@ export default function MonsoonGame() {
     }
     const AudioCtor = window.AudioContext || (window as Window & typeof globalThis & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
     if (!AudioCtor) return;
-    const audio = audioRef.current ?? new AudioCtor(); audioRef.current = audio; void audio.resume();
-    const tone = (frequency: number, delay: number, duration: number, type: OscillatorType = "sine", endFrequency?: number, volume = .075) => {
-      const oscillator = audio.createOscillator(); const gain = audio.createGain(); const start = audio.currentTime + delay;
-      oscillator.type = type; oscillator.frequency.setValueAtTime(frequency, start); if (endFrequency) oscillator.frequency.exponentialRampToValueAtTime(endFrequency, start + duration);
-      gain.gain.setValueAtTime(.0001, start); gain.gain.exponentialRampToValueAtTime(volume, start + .015); gain.gain.exponentialRampToValueAtTime(.0001, start + duration);
-      oscillator.connect(gain); gain.connect(audio.destination); oscillator.start(start); oscillator.stop(start + duration + .02);
+    const audio = audioRef.current ?? new AudioCtor(); audioRef.current = audio;
+    const playToneSequence = () => {
+      const tone = (frequency: number, delay: number, duration: number, type: OscillatorType = "sine", endFrequency?: number, volume = .075) => {
+        const oscillator = audio.createOscillator(); const gain = audio.createGain(); const start = audio.currentTime + delay;
+        oscillator.type = type; oscillator.frequency.setValueAtTime(frequency, start); if (endFrequency) oscillator.frequency.exponentialRampToValueAtTime(endFrequency, start + duration);
+        gain.gain.setValueAtTime(.0001, start); gain.gain.exponentialRampToValueAtTime(volume, start + .012); gain.gain.exponentialRampToValueAtTime(.0001, start + duration);
+        oscillator.connect(gain); gain.connect(audio.destination); oscillator.start(start); oscillator.stop(start + duration + .02);
+      };
+      if (kind === "click") tone(420, 0, .07, "triangle", 520, .035);
+      if (kind === "break") { tone(135, 0, .1, "square", 70, .045); tone(90, .06, .14, "triangle", 45, .035); }
+      if (kind === "shoot") { tone(1180, 0, .2, "sawtooth", 230, .11); tone(760, .025, .18, "square", 170, .07); tone(1560, .055, .12, "triangle", 420, .055); }
     };
-    if (kind === "click") tone(420, 0, .07, "triangle", 520, .035);
-    if (kind === "break") { tone(135, 0, .1, "square", 70, .045); tone(90, .06, .14, "triangle", 45, .035); }
-    if (kind === "shoot") { tone(720, 0, .16, "sawtooth", 210, .055); tone(980, .03, .1, "triangle", 420, .035); }
+    if (audio.state === "suspended") void audio.resume().then(playToneSequence).catch(() => { /* The next direct tap will retry audio. */ });
+    else playToneSequence();
   }, []);
 
   const makePlatforms = useCallback((width: number, height: number) => {
@@ -227,7 +260,7 @@ export default function MonsoonGame() {
     game.platforms = makePlatforms(width, height);
     game.input = 0; game.pointerX = null; game.score = 0; game.runs = 0; game.distance = 0; game.basketCursor = 4; game.lastTime = 0;
     const firstWorld = Math.floor(Math.random() * WORLDS.length);
-    game.collectionCounts = Array(BASKETS.length).fill(0); game.rocketUntil = 0; game.worldIndex = firstWorld; game.worldStage = 0; game.nextWorldChangeAt = 0; game.nearbyBasket = 1; game.isFalling = false; game.fallStarted = 0; game.resultSubmitted = false;
+    game.collectionCounts = Array(BASKETS.length).fill(0); game.droneUntil = 0; game.bootsJumpsRemaining = 0; game.fallingBoots = []; game.worldIndex = firstWorld; game.worldStage = 0; game.nextWorldChangeAt = 0; game.nearbyBasket = 1; game.isFalling = false; game.fallStarted = 0; game.resultSubmitted = false;
     game.villains = []; game.fireballs = []; game.nextVillainAt = 0; game.villainCursor = 0; game.villainsDefeated = 0;
     setScore(0); setRuns(0); setToast(null); setCollectionCounts(Array(BASKETS.length).fill(0)); setWorldIndex(firstWorld); setWorldToast(false); setNearbyBasket(1); setFalling(false); setVillainsDefeated(0); setResultStatus("idle"); setShowTiltGuide(true);
   }, [makePlatforms]);
@@ -311,6 +344,7 @@ export default function MonsoonGame() {
         for (const platform of game.platforms) { platform.x *= xScale; platform.w *= xScale; }
         for (const villain of game.villains) { villain.x *= xScale; villain.w *= xScale; }
         for (const fireball of game.fireballs) fireball.x *= xScale;
+        for (const boots of game.fallingBoots) boots.x *= xScale;
       }
       if (game.height > 0 && Math.abs(game.height - rect.height) > 1) {
         const yScale = rect.height / game.height;
@@ -318,6 +352,7 @@ export default function MonsoonGame() {
         for (const platform of game.platforms) platform.y *= yScale;
         for (const villain of game.villains) { villain.y *= yScale; villain.baseY *= yScale; villain.h *= yScale; }
         for (const fireball of game.fireballs) fireball.y *= yScale;
+        for (const boots of game.fallingBoots) boots.y *= yScale;
       }
       game.width = rect.width; game.height = rect.height;
     };
@@ -384,15 +419,16 @@ export default function MonsoonGame() {
       const { player, width, height } = game;
       const beginFall = () => {
         if (game.isFalling) return;
-        game.isFalling = true; game.fallStarted = time; game.input = 0; game.pointerX = null; game.platforms = []; game.villains = []; game.fireballs = []; game.rocketUntil = 0;
+        game.isFalling = true; game.fallStarted = time; game.input = 0; game.pointerX = null; game.platforms = []; game.villains = []; game.fireballs = []; game.droneUntil = 0; game.bootsJumpsRemaining = 0; game.fallingBoots = [];
         player.y = height * .4; player.vy = 1.6; setToast(null); setFalling(true); playSfx("fall");
       };
       if (!game.isFalling && game.pointerX != null) game.input = clamp((game.pointerX - (player.x + player.w / 2)) / 90, -1, 1);
       if (!game.isFalling) { player.vx += game.input * 0.6 * dt; player.vx *= Math.pow(0.9, dt); player.vx = clamp(player.vx, -6.7, 6.7); }
       else player.vx *= Math.pow(.985, dt);
       const previousBottom = player.y + player.h;
-      const rocketing = time < game.rocketUntil;
-      player.x += player.vx * dt; player.vy += (game.isFalling ? .16 : rocketing ? 0.12 : 0.48) * dt; player.y += player.vy * dt;
+      const droning = time < game.droneUntil;
+      const wearingSpringBoots = game.bootsJumpsRemaining > 0;
+      player.x += player.vx * dt; player.vy += (game.isFalling ? .16 : droning ? 0.12 : 0.48) * dt; player.y += player.vy * dt;
       if (player.x < -player.w * .45) player.x = width - player.w * .55;
       if (player.x > width - player.w * .55) player.x = -player.w * .45;
 
@@ -417,9 +453,14 @@ export default function MonsoonGame() {
         const newBottom = player.y + player.h;
         if (player.vy > 0 && previousBottom <= platform.y + 4 && newBottom >= platform.y && player.x + player.w > platform.x && player.x < platform.x + platform.w) {
           player.y = platform.y - player.h;
-          if (platform.powerUp === "rocket" && !platform.powerUsed) { player.vy = -23; game.rocketUntil = time + 1100; platform.powerUsed = true; playSfx("rocket"); }
-          else if (platform.powerUp === "spring" && !platform.powerUsed) { player.vy = -17; platform.powerUsed = true; playSfx("spring"); }
-          else { player.vy = -11.5; playSfx("jump"); }
+          if (platform.powerUp === "drone" && !platform.powerUsed) { player.vy = -23; game.droneUntil = time + 1100; platform.powerUsed = true; playSfx("rocket"); }
+          else {
+            if (platform.powerUp === "boots" && !platform.powerUsed) { game.bootsJumpsRemaining = 5; platform.powerUsed = true; }
+            if (game.bootsJumpsRemaining > 0) {
+              player.vy = -16.3; game.bootsJumpsRemaining -= 1; playSfx("spring");
+              if (game.bootsJumpsRemaining === 0) game.fallingBoots.push({ x: player.x + player.w / 2, y: player.y + player.h - 4, vy: 1.8, spin: 0, life: 95 });
+            } else { player.vy = -11.5; playSfx("jump"); }
+          }
           if (platform.kind === "breakable") { platform.broken = true; playSfx("break"); }
         }
       }
@@ -434,6 +475,7 @@ export default function MonsoonGame() {
       if (!game.isFalling && player.y < height * 0.4 && player.vy < 0) {
         const shift = height * 0.4 - player.y; player.y = height * 0.4; game.distance += shift;
         for (const platform of game.platforms) platform.y += shift;
+        for (const boots of game.fallingBoots) boots.y += shift;
         game.score = Math.max(game.score, Math.floor(game.distance * 2)); setScore(game.score);
       }
       game.platforms = game.platforms.filter((platform) => platform.y < height + 40);
@@ -482,6 +524,8 @@ export default function MonsoonGame() {
 
       const candidate = game.platforms.filter((platform) => platform.basket != null && !platform.collected && !platform.broken).sort((a, b) => Math.abs(a.y - player.y) - Math.abs(b.y - player.y))[0];
       if (candidate?.basket != null && candidate.basket !== game.nearbyBasket) { game.nearbyBasket = candidate.basket; setNearbyBasket(candidate.basket); }
+      for (const boots of game.fallingBoots) { boots.vy += .22 * dt; boots.y += boots.vy * dt; boots.spin += .13 * dt; boots.life -= dt; }
+      game.fallingBoots = game.fallingBoots.filter((boots) => boots.life > 0 && boots.y < height + 60);
       drawWorld(WORLDS[game.worldIndex].scene, time, width, height);
 
       for (const platform of game.platforms) {
@@ -490,8 +534,20 @@ export default function MonsoonGame() {
         context.fillStyle = grad; context.beginPath(); context.roundRect(platform.x, platform.y, platform.w, platform.h, 7); context.fill();
         context.fillStyle = "rgba(255,255,255,.45)"; context.beginPath(); context.roundRect(platform.x + 8, platform.y + 2, platform.w - 16, 2, 2); context.fill();
         if (platform.kind === "breakable") { context.strokeStyle = "rgba(70,12,24,.75)"; context.lineWidth = 1.5; context.beginPath(); context.moveTo(platform.x + platform.w * .48, platform.y + 1); context.lineTo(platform.x + platform.w * .58, platform.y + 7); context.lineTo(platform.x + platform.w * .45, platform.y + 12); context.stroke(); }
-        if (platform.powerUp === "spring" && !platform.powerUsed) { const cx = platform.x + platform.w / 2; context.strokeStyle = "#eaffff"; context.lineWidth = 2.3; context.beginPath(); context.moveTo(cx - 10, platform.y); context.lineTo(cx + 9, platform.y - 6); context.lineTo(cx - 9, platform.y - 12); context.lineTo(cx + 7, platform.y - 18); context.stroke(); context.fillStyle = "#0cd8ba"; context.beginPath(); context.roundRect(cx - 13, platform.y - 22, 26, 5, 3); context.fill(); }
-        if (platform.powerUp === "rocket" && !platform.powerUsed) { context.font = "25px system-ui"; context.textAlign = "center"; context.fillText("🚀", platform.x + platform.w / 2, platform.y - 8); }
+        if (platform.powerUp === "boots" && !platform.powerUsed) {
+          const cx = platform.x + platform.w / 2; context.save(); context.translate(cx, platform.y - 3);
+          for (const side of [-1, 1]) {
+            const bx = side * 11; context.strokeStyle = "#dffcff"; context.lineWidth = 2; context.beginPath(); context.moveTo(bx - 4, 0); context.lineTo(bx + 4, -5); context.lineTo(bx - 4, -10); context.lineTo(bx + 4, -15); context.stroke();
+            context.fillStyle = "#0cd8ba"; context.beginPath(); context.roundRect(bx - 8, -25, 16, 11, 4); context.fill(); context.fillStyle = "#05243c"; context.beginPath(); context.roundRect(bx - 7, -18, 18, 5, 2); context.fill();
+          }
+          context.restore();
+        }
+        if (platform.powerUp === "drone" && !platform.powerUsed) {
+          const cx = platform.x + platform.w / 2; context.save(); context.translate(cx, platform.y - 17); context.strokeStyle = "#b9fff0"; context.lineWidth = 2.2;
+          const rotors = [[-24, -7], [-17, 7], [17, 7], [24, -7]];
+          for (const [rx, ry] of rotors) { context.beginPath(); context.moveTo(rx * .38, ry * .38); context.lineTo(rx, ry); context.stroke(); context.fillStyle = "rgba(223,252,255,.88)"; context.beginPath(); context.ellipse(rx, ry, 10 + Math.sin(time / 55 + rx) * 2, 2.5, 0, 0, Math.PI * 2); context.fill(); }
+          context.fillStyle = "#253d5b"; context.beginPath(); context.roundRect(-14, -8, 28, 16, 6); context.fill(); context.strokeStyle = "#ffe17c"; context.stroke(); context.fillStyle = "#0cd8ba"; context.beginPath(); context.arc(0, 0, 3.5, 0, Math.PI * 2); context.fill(); context.restore();
+        }
         if (platform.basket != null && !platform.collected) {
           const basket = BASKETS[platform.basket]; const cx = platform.x + platform.w / 2;
           const labelX = clamp(cx - 54, 5, width - 113);
@@ -503,30 +559,50 @@ export default function MonsoonGame() {
         }
       }
 
+      for (const boots of game.fallingBoots) {
+        context.save(); context.translate(boots.x, boots.y); context.rotate(boots.spin);
+        for (const side of [-1, 1]) { const bx = side * 10; context.strokeStyle = "#dffcff"; context.lineWidth = 2; context.beginPath(); context.moveTo(bx - 4, -5); context.lineTo(bx + 4, 0); context.lineTo(bx - 4, 5); context.lineTo(bx + 4, 10); context.stroke(); context.fillStyle = "#0cd8ba"; context.beginPath(); context.roundRect(bx - 8, 8, 18, 8, 3); context.fill(); }
+        context.restore();
+      }
+
       for (const fireball of game.fireballs) {
-        const flame = context.createRadialGradient(fireball.x, fireball.y, 1, fireball.x, fireball.y, 14); flame.addColorStop(0, "#fff8b5"); flame.addColorStop(.4, "#ffb000"); flame.addColorStop(1, "rgba(255,65,20,0)");
-        context.fillStyle = flame; context.beginPath(); context.arc(fireball.x, fireball.y, 14, 0, Math.PI * 2); context.fill();
-        context.fillStyle = "#fff4a3"; context.beginPath(); context.arc(fireball.x, fireball.y, 5, 0, Math.PI * 2); context.fill();
+        context.save(); context.translate(fireball.x, fireball.y); context.rotate(Math.atan2(fireball.vy, fireball.vx));
+        for (let i = 0; i < 4; i += 1) { const trail = 10 + i * 7; context.fillStyle = i < 2 ? "rgba(255,176,0,.82)" : "rgba(255,55,20,.48)"; context.beginPath(); context.ellipse(-trail, Math.sin(time / 45 + i) * 4, 11 - i * 1.6, 6 - i, 0, 0, Math.PI * 2); context.fill(); }
+        const flame = context.createRadialGradient(0, 0, 1, 0, 0, 18); flame.addColorStop(0, "#fffde0"); flame.addColorStop(.28, "#ffe14c"); flame.addColorStop(.62, "#ff7a18"); flame.addColorStop(1, "rgba(215,25,18,0)");
+        context.fillStyle = flame; context.beginPath(); context.arc(0, 0, 18, 0, Math.PI * 2); context.fill();
+        context.fillStyle = "#fffbea"; context.beginPath(); context.arc(0, 0, 5.5, 0, Math.PI * 2); context.fill(); context.restore();
       }
       for (const villain of game.villains) {
         if (!villain.alive) continue;
         context.save(); context.translate(villain.x + villain.w / 2, villain.y + villain.h / 2);
-        const wing = 8 + Math.sin(time / 95 + villain.phase) * 5;
-        context.fillStyle = "rgba(213,225,255,.72)"; context.beginPath(); context.ellipse(-24, 0, 13, wing, -.3, 0, Math.PI * 2); context.ellipse(24, 0, 13, wing, .3, 0, Math.PI * 2); context.fill();
-        context.fillStyle = "#5b2c83"; context.strokeStyle = "#e7b7ff"; context.lineWidth = 2; context.beginPath(); context.roundRect(-20, -18, 40, 36, 13); context.fill(); context.stroke();
-        context.fillStyle = "#ffdd57"; context.beginPath(); context.moveTo(-15, -15); context.lineTo(-9, -28); context.lineTo(-3, -16); context.moveTo(4, -16); context.lineTo(11, -28); context.lineTo(16, -14); context.fill();
-        context.fillStyle = "white"; context.beginPath(); context.ellipse(-8, -3, 6, 7, 0, 0, Math.PI * 2); context.ellipse(8, -3, 6, 7, 0, 0, Math.PI * 2); context.fill();
-        context.fillStyle = "#d62645"; context.beginPath(); context.arc(-7, -2, 2.5, 0, Math.PI * 2); context.arc(7, -2, 2.5, 0, Math.PI * 2); context.fill();
-        context.strokeStyle = "#fff"; context.lineWidth = 2; context.beginPath(); context.arc(0, 6, 8, .15, Math.PI - .15); context.stroke(); context.restore();
+        const wing = 9 + Math.sin(time / 85 + villain.phase) * 5;
+        context.fillStyle = "rgba(55,12,75,.9)"; context.strokeStyle = "#ff365d"; context.lineWidth = 2;
+        for (const side of [-1, 1]) { context.beginPath(); context.moveTo(side * 17, -7); context.lineTo(side * 36, -wing); context.lineTo(side * 29, 0); context.lineTo(side * 38, wing); context.lineTo(side * 16, 11); context.closePath(); context.fill(); context.stroke(); }
+        context.fillStyle = "#1d102d"; context.strokeStyle = "#ff365d"; context.lineWidth = 2.5; context.beginPath(); context.roundRect(-21, -19, 42, 39, 12); context.fill(); context.stroke();
+        context.fillStyle = "#d51d42"; context.beginPath(); context.moveTo(-17, -15); context.lineTo(-12, -31); context.lineTo(-4, -18); context.moveTo(4, -18); context.lineTo(12, -31); context.lineTo(17, -15); context.fill();
+        context.fillStyle = "#fff"; context.beginPath(); context.moveTo(-16, -7); context.lineTo(-3, -3); context.lineTo(-15, 2); context.closePath(); context.moveTo(16, -7); context.lineTo(3, -3); context.lineTo(15, 2); context.closePath(); context.fill();
+        context.fillStyle = "#ff163f"; context.beginPath(); context.arc(-9, -3, 2.7, 0, Math.PI * 2); context.arc(9, -3, 2.7, 0, Math.PI * 2); context.fill();
+        context.fillStyle = "#fff"; context.beginPath(); context.moveTo(-10, 8); context.lineTo(-4, 16); context.lineTo(0, 8); context.lineTo(5, 16); context.lineTo(11, 8); context.closePath(); context.fill(); context.restore();
       }
 
       const px = player.x, py = player.y;
       context.save(); context.translate(px + player.w / 2, py + player.h / 2); context.rotate(game.isFalling ? (time - game.fallStarted) / 240 : clamp(player.vx / 34, -.17, .17)); if (player.vx < 0) context.scale(-1, 1);
-      if (rocketing) { context.fillStyle = "#ffda55"; context.beginPath(); context.moveTo(-8, 26); context.lineTo(0, 50 + Math.random() * 12); context.lineTo(8, 26); context.fill(); context.fillStyle = "#ff6d3a"; context.beginPath(); context.moveTo(-4, 25); context.lineTo(0, 43); context.lineTo(4, 25); context.fill(); }
+      const upgradeTier = Math.min(game.worldStage, 5); const outfitColors = ["#0cd8ba", "#ff9f1c", "#9b5de5", "#ef476f", "#00bbf9", "#ffe17c"]; const outfitColor = outfitColors[game.worldStage % outfitColors.length];
+      if (upgradeTier >= 2) { context.fillStyle = `${outfitColor}bb`; context.beginPath(); context.moveTo(-16, 3); context.quadraticCurveTo(-31, 18, -23, 37); context.lineTo(-2, 19); context.closePath(); context.fill(); }
+      if (droning) {
+        context.strokeStyle = "#dffcff"; context.lineWidth = 2.4; const rotors = [[-34, -13], [-31, 11], [31, 11], [34, -13]];
+        for (const [rx, ry] of rotors) { context.beginPath(); context.moveTo(Math.sign(rx) * 10, ry * .35); context.lineTo(rx, ry); context.stroke(); context.fillStyle = "rgba(223,252,255,.9)"; context.beginPath(); context.ellipse(rx, ry, 12 + Math.sin(time / 38 + rx) * 2, 3, 0, 0, Math.PI * 2); context.fill(); }
+        context.fillStyle = "#253d5b"; context.beginPath(); context.roundRect(-12, -12, 24, 27, 7); context.fill(); context.strokeStyle = "#ffe17c"; context.stroke();
+      }
       const moving = Math.abs(player.vx) > 1.05;
       const sprite = game.isFalling ? (Math.floor(time / 105) % 2 === 0 ? runSpriteRef.current : spriteRef.current) : moving ? runSpriteRef.current : spriteRef.current;
       if (sprite?.complete && sprite.naturalWidth > 0) context.drawImage(sprite, -33, -38, 66, 66);
       else { context.fillStyle = "#169fe3"; context.beginPath(); context.arc(0, 0, 20, 0, Math.PI * 2); context.fill(); }
+      if (upgradeTier >= 1) { context.fillStyle = outfitColor; context.beginPath(); context.roundRect(-14, 5, 28, 13, 6); context.fill(); context.fillStyle = "rgba(255,255,255,.75)"; context.beginPath(); context.arc(0, 11, 3, 0, Math.PI * 2); context.fill(); }
+      if (wearingSpringBoots) { for (const side of [-1, 1]) { const bx = side * 11; context.strokeStyle = "#dffcff"; context.lineWidth = 2; context.beginPath(); context.moveTo(bx - 4, 22); context.lineTo(bx + 4, 26); context.lineTo(bx - 4, 30); context.lineTo(bx + 4, 34); context.stroke(); context.fillStyle = "#0cd8ba"; context.beginPath(); context.roundRect(bx - 8, 31, 18, 8, 3); context.fill(); } }
+      if (upgradeTier >= 3) { context.fillStyle = "#ffe17c"; context.strokeStyle = "#9d6616"; context.lineWidth = 1.5; context.beginPath(); context.moveTo(-15, -29); context.lineTo(-11, -43); context.lineTo(-3, -33); context.lineTo(3, -45); context.lineTo(10, -33); context.lineTo(16, -43); context.lineTo(15, -27); context.closePath(); context.fill(); context.stroke(); }
+      if (upgradeTier >= 4) { context.strokeStyle = "#ffe17c"; context.lineWidth = 3; context.beginPath(); context.moveTo(18, 8); context.lineTo(35, -15); context.stroke(); context.fillStyle = outfitColor; context.beginPath(); for (let i = 0; i < 10; i += 1) { const radius = i % 2 === 0 ? 8 : 3.5; const angle = -Math.PI / 2 + i * Math.PI / 5; const sx = 36 + Math.cos(angle) * radius; const sy = -18 + Math.sin(angle) * radius; if (i === 0) context.moveTo(sx, sy); else context.lineTo(sx, sy); } context.closePath(); context.fill(); }
+      if (upgradeTier >= 5) { context.fillStyle = "#fff7a8"; for (let i = 0; i < 5; i += 1) { const angle = time / 430 + i * Math.PI * .4; context.beginPath(); context.arc(Math.cos(angle) * 43, Math.sin(angle) * 35, 2.2, 0, Math.PI * 2); context.fill(); } }
       context.restore();
 
       if (game.isFalling && time - game.fallStarted > 1650) {
@@ -579,7 +655,7 @@ export default function MonsoonGame() {
         <div className="quick-rules" aria-label="How to play">
           <span>↔ <b>Tilt to move</b></span>
           <span>🧺 <b>Collect baskets</b></span>
-          <span>🚀 <b>Boost higher</b></span>
+          <span>✣ <b>Drone boost</b></span>
         </div>
 
         <div className="intro-details">
@@ -622,10 +698,10 @@ export default function MonsoonGame() {
             <div className="slab-meter"><span>{nextSlab ? `TO ${nextSlab.runs} RUNS` : "BONUS CLIMB"}</span><div><i style={{ width: `${progress}%` }} /></div><b>{runs} RUNS SCORED</b></div>
             <div><span>POINTS</span><strong>{rewardPoints(runs).toLocaleString("en-IN")}</strong></div>
           </div>
-          <div className="control-note">{control} · {score < SCORE_GATES.movingBoards ? "fixed-board warm-up" : score < SCORE_GATES.breakableBoards ? "moving boards unlocked" : score < SCORE_GATES.villains ? "breakable boards unlocked" : "villain zone"}</div>
+          <div className="control-note">{control}</div>
           <div className={`world-chip ${worldToast ? "is-new" : ""}`}>{WORLDS[worldIndex].icon} {WORLDS[worldIndex].name}</div>
           <button className="sound-toggle" aria-label={muted ? "Turn sound on" : "Mute sound"} onClick={() => { const next = !muted; mutedRef.current = next; setMuted(next); if (next && "speechSynthesis" in window) window.speechSynthesis.cancel(); if (!next) playSfx("click"); }}>{muted ? "🔇" : "🔊"}</button>
-          <div className="nearby-goodie"><span>NEXT GOODIE</span><strong>{BASKETS[nearbyBasket].name}</strong><b>+{BASKETS[nearbyBasket].runs} Runs</b></div>
+          <div className="nearby-goodie" title={BASKETS[nearbyBasket].name}><span>NEXT</span><strong>{BASKETS[nearbyBasket].short}</strong><b>+{BASKETS[nearbyBasket].runs} Runs</b></div>
           {score >= SCORE_GATES.villains && <div className="shoot-tip">🔥 TAP A VILLAIN TO SHOOT <b>{villainsDefeated} defeated</b></div>}
         </>}
         {showTiltGuide && !falling && <div className="tilt-guide" role="status"><span className="tilt-phone" aria-hidden="true">📱</span><div><strong>TILT TO MOVE DOREMON</strong><p>Move your phone left or right</p></div></div>}
